@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -86,20 +88,54 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func processFile(filePath string, fieldMappings map[string]string) (string, string) {
-	// Open the uploaded file
-	f, err := excelize.OpenFile(filePath)
-	if err != nil {
-		fmt.Println("Error opening file:", err)
-		return "Error opening file.", "Error opening file."
+	var rows [][]string
+	var err error
+
+	// Determine the file type
+	if strings.HasSuffix(filePath, ".xlsx") {
+		// Process as .xlsx file
+		f, err := excelize.OpenFile(filePath)
+		if err != nil {
+			fmt.Println("Error opening file:", err)
+			return "Error opening file.", "Error opening file."
+		}
+
+		sheetName := f.GetSheetName(0)
+		rows, err = f.GetRows(sheetName)
+		if err != nil {
+			fmt.Println("Error reading sheet rows:", err)
+			return "Error reading sheet rows.", "Error reading sheet rows."
+		}
+	} else if strings.HasSuffix(filePath, ".csv") {
+		// Process as .csv file
+		csvFile, err := os.Open(filePath)
+		if err != nil {
+			fmt.Println("Error opening CSV file:", err)
+			return "Error opening CSV file.", "Error opening CSV file."
+		}
+		defer csvFile.Close()
+
+		reader := csv.NewReader(csvFile)
+		for {
+			record, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				fmt.Println("Error reading CSV file:", err)
+				return "Error reading CSV file.", "Error reading CSV file."
+			}
+			rows = append(rows, record)
+		}
+	} else {
+		return "Unsupported file format.", "Unsupported file format."
 	}
 
-	sheetName := f.GetSheetName(0)
-	rows, err := f.GetRows(sheetName)
-	if err != nil {
-		fmt.Println("Error reading sheet rows:", err)
-		return "Error reading sheet rows.", "Error reading sheet rows."
+	if len(rows) == 0 {
+		return "No data found in the file.", "No data found in the file."
 	}
 
+	// Proceed with processing the rows (common for both .xlsx and .csv)
 	var summaryBuilder strings.Builder
 	summaryBuilder.WriteString("Data Mapping Summary:\n")
 	missingCount := 0
