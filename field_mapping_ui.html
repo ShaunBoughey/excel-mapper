@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Field Mapping UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.16.2/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+        .mapping-container {
+            margin-top: 20px;
+        }
+        select {
+            margin-bottom: 10px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col-md-8 offset-md-2">
+                <h1 class="my-4 text-center">Upload File for Field Mapping</h1>
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <form id="mappingForm" method="POST" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="fileInput" class="form-label">Select File</label>
+                                <input type="file" name="fileInput" id="fileInput" class="form-control" autocomplete="off" accept=".csv, .xlsx"/>
+                            </div>
+                            <div id="mappingContainer" class="mapping-container"></div>
+                            <button type="submit" class="btn btn-primary" id="submitButton" disabled>Submit Mapping</button>
+                        </form>
+                    </div>
+                </div>
+                <div id="resultContainer" class="card mt-4 d-none">
+                    <div class="card-body">
+                        <h5 class="card-title">Upload Summary</h5>
+                        <pre id="summaryContent" class="bg-light p-3"></pre>
+                        <a id="downloadLink" href="#" class="btn btn-success mt-3 d-none">Download Processed Data</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('fileInput').addEventListener('change', handleFile, false);
+        document.getElementById('mappingForm').addEventListener('submit', handleSubmit, false);
+
+        function handleFile(e) {
+            const file = e.target.files[0];
+            const submitButton = document.getElementById('submitButton');
+
+            if (!file) {
+                submitButton.disabled = true;
+                return;
+            }
+
+            submitButton.disabled = false;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                const headers = XLSX.utils.sheet_to_json(firstSheet, { header: 1 })[0];
+
+                showMappingUI(headers);
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        function showMappingUI(headers) {
+            const expectedFields = [
+                "Client Code", "LE ID", "Customer ID", "Customer Name", 
+                "Customer Active", "Account ID", "Account Name", "Account Active"
+            ];
+            const mandatoryFields = [
+                "Client Code", "Customer ID", "Account ID"
+            ];
+
+            const mappingContainer = document.getElementById('mappingContainer');
+            mappingContainer.innerHTML = '';
+
+            expectedFields.forEach(field => {
+                const div = document.createElement('div');
+                div.classList.add('mb-3');
+
+                const label = document.createElement('label');
+                label.textContent = `Map to "${field}": `;
+                label.classList.add('form-label');
+                if (mandatoryFields.includes(field)) {
+                    label.innerHTML += ' <span class="text-danger">(mandatory)</span>';
+                }
+                
+                const select = document.createElement('select');
+                select.name = `mapping_${field.replace(/ /g, '_')}`;
+                select.classList.add('form-select');
+                select.dataset.mandatory = mandatoryFields.includes(field) ? "true" : "false";
+                select.addEventListener('change', validateForm);
+
+                const emptyOption = document.createElement('option');
+                emptyOption.value = "";
+                emptyOption.textContent = "-- Select Column --";
+                select.appendChild(emptyOption);
+
+                headers.forEach(header => {
+                    const option = document.createElement('option');
+                    option.value = header;
+                    option.textContent = header;
+                    select.appendChild(option);
+                });
+
+                div.appendChild(label);
+                div.appendChild(select);
+                mappingContainer.appendChild(div);
+            });
+
+            validateForm();
+        }
+
+        function validateForm() {
+            const selects = document.querySelectorAll('#mappingContainer select');
+            let allMandatoryMapped = true;
+
+            selects.forEach(select => {
+                if (select.dataset.mandatory === "true" && select.value === "") {
+                    allMandatoryMapped = false;
+                }
+            });
+
+            document.getElementById('submitButton').disabled = !allMandatoryMapped;
+        }
+
+        function handleSubmit(e) {
+            e.preventDefault();
+
+            const formData = new FormData(document.getElementById('mappingForm'));
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.text();
+            })
+            .then(data => {
+                handleUploadSummary(data);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred during the upload. Please try again.');
+            });
+        }
+
+        function handleUploadSummary(summary) {
+            const resultContainer = document.getElementById('resultContainer');
+            const summaryContent = document.getElementById('summaryContent');
+            const downloadLink = document.getElementById('downloadLink');
+
+            resultContainer.classList.remove('d-none');
+            summaryContent.textContent = summary;
+
+            // Make the download button visible
+            downloadLink.href = '/download?file=processed_data.xlsx';
+            downloadLink.classList.remove('d-none');
+        }
+    </script>
+</body>
+</html>
