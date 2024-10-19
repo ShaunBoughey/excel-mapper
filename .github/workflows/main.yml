@@ -1,0 +1,9 @@
+name: Go coverage
+run-name: ${{ github.actor }} go coverage 🚀
+on: [push]
+jobs:
+  my_first_job:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Go Coverage Badge
+      uses: tj-actions/coverage-badge-go@v2.4.2
