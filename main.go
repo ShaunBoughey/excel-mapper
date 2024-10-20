@@ -74,20 +74,24 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Extract field mappings from form
 	fieldMappings := make(map[string]string)
+	order := []string{"Client_Code", "LE_ID", "Customer_ID", "Customer_Name", "Customer_Active", "Account_ID", "Account_Name", "Account_Active"}
 	for key, values := range r.PostForm {
 		if strings.HasPrefix(key, "mapping_") {
 			expectedField := strings.TrimPrefix(key, "mapping_")
 			fieldMappings[expectedField] = values[0]
+			if !contains(order, expectedField) {
+				order = append(order, expectedField)
+			}
 		}
 	}
 
 	// Process the uploaded file using the field mappings
-	summary, outputFilePath := processFile(tempFilePath, fieldMappings)
+	summary, _ := processFile(tempFilePath, fieldMappings, order)
 
-	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n\nDownload Processed Data: <a href=\"/download?file=%s\">Download Excel</a>", fieldMappings, summary, outputFilePath)
+	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
 }
 
-func processFile(filePath string, fieldMappings map[string]string) (string, string) {
+func processFile(filePath string, fieldMappings map[string]string, order []string) (string, string) {
 	var rows [][]string
 	var err error
 
@@ -154,12 +158,8 @@ func processFile(filePath string, fieldMappings map[string]string) (string, stri
 	outputFile.DeleteSheet("Sheet1")
 
 	// Set headers for ProcessedData and MissingData sheets
-	processedHeaders := []string{}
-	for expectedField := range fieldMappings {
-		processedHeaders = append(processedHeaders, expectedField)
-	}
-	outputFile.SetSheetRow("ProcessedData", "A1", &processedHeaders)
-	outputFile.SetSheetRow("MissingData", "A1", &processedHeaders)
+	outputFile.SetSheetRow("ProcessedData", "A1", &order)
+	outputFile.SetSheetRow("MissingData", "A1", &order)
 
 	outputRowIndex := 2
 	missingRowIndex := 2
@@ -171,11 +171,11 @@ func processFile(filePath string, fieldMappings map[string]string) (string, stri
 			continue
 		}
 
-		processedRow := make([]string, len(fieldMappings))
-		missingRow := make([]string, len(fieldMappings))
+		processedRow := make([]string, len(order))
+		missingRow := make([]string, len(order))
 		rowMissingFields := []string{}
 		rowSuccess := true
-		for fieldIndex, expectedField := range processedHeaders {
+		for fieldIndex, expectedField := range order {
 			// Normalize column header for comparison
 			normalizedColumnHeader := strings.TrimSpace(strings.ToLower(fieldMappings[expectedField]))
 
@@ -225,7 +225,7 @@ func processFile(filePath string, fieldMappings map[string]string) (string, stri
 		return summaryBuilder.String(), ""
 	}
 
-	return summaryBuilder.String(), outputFilePath
+	return summaryBuilder.String(), ""
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -242,4 +242,13 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, filePath)
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

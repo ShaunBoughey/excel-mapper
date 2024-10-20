@@ -263,8 +263,8 @@ func TestProcessFileSuccess(t *testing.T) {
 		"Customer ID":    "Customer ID",
 		"Account Number": "Account Number",
 	}
-
-	summary, errStr := processFile(tempFile.Name(), fieldMappings)
+	order := []string{"Client Code", "Customer ID", "Account Number"}
+	summary, errStr := processFile(tempFile.Name(), fieldMappings, order)
 
 	if errStr != "" && !strings.Contains(errStr, "processed_data.xlsx") {
 		t.Errorf("unexpected error string: got %v", errStr)
@@ -283,8 +283,8 @@ func TestProcessFileInvalidFile(t *testing.T) {
 		"Customer ID":    "Customer ID",
 		"Account Number": "Account Number",
 	}
-
-	_, errStr := processFile(invalidFilePath, fieldMappings)
+	order := []string{"Client Code", "Customer ID", "Account Number"}
+	_, errStr := processFile(invalidFilePath, fieldMappings, order)
 
 	if errStr == "" || !strings.Contains(errStr, "Error opening file") {
 		t.Errorf("expected error string for invalid file path: got %v", errStr)
