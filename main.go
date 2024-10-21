@@ -287,7 +287,13 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := "./uploads/" + file
+	if strings.Contains(file, "..") || strings.ContainsAny(file, `/\`) {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join("./uploads", file)
+
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return

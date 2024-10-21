@@ -214,7 +214,7 @@ func TestHandleDownloadMissingFileParameter(t *testing.T) {
 
 func TestHandleDownloadNonExistentFile(t *testing.T) {
 	// Test case where requested file does not exist
-	req, err := http.NewRequest("GET", "/download?file=./uploads/non_existent_file.xlsx", nil)
+	req, err := http.NewRequest("GET", "/download?file=non_existent_file.xlsx", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,6 +224,21 @@ func TestHandleDownloadNonExistentFile(t *testing.T) {
 
 	if status := recorder.Code; status != http.StatusNotFound {
 		t.Errorf("handler returned wrong status code for non-existent file: got %v want %v", status, http.StatusNotFound)
+	}
+}
+
+func TestHandleDownloadInvalidFilePath(t *testing.T) {
+	// Test case where requested file path is invalid (attempting path traversal)
+	req, err := http.NewRequest("GET", "/download?file=../secret_file.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	http.HandlerFunc(handleDownload).ServeHTTP(recorder, req)
+
+	if status := recorder.Code; status != http.StatusBadRequest {
+		t.Errorf("handler returned wrong status code for invalid file path: got %v want %v", status, http.StatusBadRequest)
 	}
 }
 
