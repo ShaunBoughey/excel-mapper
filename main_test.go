@@ -264,7 +264,8 @@ func TestProcessFileSuccess(t *testing.T) {
 		"Account Number": "Account Number",
 	}
 	order := []string{"Client Code", "Customer ID", "Account Number"}
-	summary, errStr := processFile(tempFile.Name(), fieldMappings, order)
+	outputFormat := "excel"
+	summary, errStr := processFile(tempFile.Name(), fieldMappings, order, outputFormat)
 
 	if errStr != "" && !strings.Contains(errStr, "processed_data.xlsx") {
 		t.Errorf("unexpected error string: got %v", errStr)
@@ -284,9 +285,46 @@ func TestProcessFileInvalidFile(t *testing.T) {
 		"Account Number": "Account Number",
 	}
 	order := []string{"Client Code", "Customer ID", "Account Number"}
-	_, errStr := processFile(invalidFilePath, fieldMappings, order)
+	outputFormat := "excel"
+	_, errStr := processFile(invalidFilePath, fieldMappings, order, outputFormat)
 
 	if errStr == "" || !strings.Contains(errStr, "Error opening file") {
 		t.Errorf("expected error string for invalid file path: got %v", errStr)
+	}
+}
+
+func TestProcessFileCSVOutput(t *testing.T) {
+	// Create a temporary CSV file for testing
+	tempFile, err := os.CreateTemp("./uploads", "test_process_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	// Write headers and data to the temporary CSV file
+	fileContent := `Account Number,Account Active,Customer Name,Customer ID
+	1234,Yes,John Doe,1001
+	2345,No,Jane Smith,1002`
+	_, err = tempFile.WriteString(fileContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fieldMappings := map[string]string{
+		"Client Code":    "Account Number",
+		"Customer ID":    "Customer ID",
+		"Account Number": "Account Number",
+	}
+	order := []string{"Client Code", "Customer ID", "Account Number"}
+	outputFormat := "csv"
+
+	summary, processedFilePath := processFile(tempFile.Name(), fieldMappings, order, outputFormat)
+
+	if summary == "" {
+		t.Errorf("unexpected empty summary")
+	}
+
+	if processedFilePath == "" || !strings.HasSuffix(processedFilePath, ".csv") {
+		t.Errorf("expected a valid processed CSV file path, got %v", processedFilePath)
 	}
 }

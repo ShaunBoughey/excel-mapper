@@ -85,13 +85,15 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	outputFormat := r.PostFormValue("outputFormat")
+
 	// Process the uploaded file using the field mappings
-	summary, _ := processFile(tempFilePath, fieldMappings, order)
+	summary, _ := processFile(tempFilePath, fieldMappings, order, outputFormat)
 
 	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
 }
 
-func processFile(filePath string, fieldMappings map[string]string, order []string) (string, string) {
+func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
 	var rows [][]string
 	var err error
 
@@ -217,7 +219,57 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	// Output summary to the console as well
 	fmt.Println(summaryBuilder.String())
 
-	// Save the output file
+	// Save the output file based on user choice
+	if outputFormat == "csv" {
+		// Save processed rows to CSV
+		outputFilePath := "./uploads/processed_data.csv"
+		csvFile, err := os.Create(outputFilePath)
+		if err != nil {
+			fmt.Println("Error creating CSV file:", err)
+			return summaryBuilder.String(), ""
+		}
+		defer csvFile.Close()
+
+		csvWriter := csv.NewWriter(csvFile)
+		csvWriter.Comma = '|'
+		csvWriter.Write(order)
+		// Write processed rows
+		for rowIndex := 2; rowIndex < outputRowIndex; rowIndex++ {
+			row := make([]string, len(order))
+			for j := range row {
+				cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+				row[j] = cell
+			}
+			csvWriter.Write(row)
+		}
+		csvWriter.Flush()
+
+		// Save missing rows to separate CSV
+		missingFilePath := "./uploads/missing_data.csv"
+		missingCsvFile, err := os.Create(missingFilePath)
+		if err != nil {
+			fmt.Println("Error creating missing data CSV file:", err)
+			return summaryBuilder.String(), ""
+		}
+		defer missingCsvFile.Close()
+
+		missingCsvWriter := csv.NewWriter(missingCsvFile)
+		missingCsvWriter.Comma = '|'
+		missingCsvWriter.Write(order)
+		// Write missing rows
+		for rowIndex := 2; rowIndex < missingRowIndex; rowIndex++ {
+			row := make([]string, len(order))
+			for j := range row {
+				cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+				row[j] = cell
+			}
+			missingCsvWriter.Write(row)
+		}
+		missingCsvWriter.Flush()
+
+		return summaryBuilder.String(), outputFilePath
+	}
+
 	outputFilePath := "./uploads/processed_data.xlsx"
 	err = outputFile.SaveAs(outputFilePath)
 	if err != nil {
@@ -225,7 +277,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 		return summaryBuilder.String(), ""
 	}
 
-	return summaryBuilder.String(), ""
+	return summaryBuilder.String(), outputFilePath
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {
