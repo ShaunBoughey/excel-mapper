@@ -58,8 +58,35 @@
     </div>
 
     <script>
-        document.getElementById('fileInput').addEventListener('change', handleFile, false);
-        document.getElementById('mappingForm').addEventListener('submit', handleSubmit, false);
+        // Global variables to store configuration
+        let fieldConfig = {
+            fields: [],
+            mandatoryFields: []
+        };
+
+        // Load configuration when the page loads
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadConfiguration();
+            setupEventListeners();
+        });
+
+        async function loadConfiguration() {
+            try {
+                const response = await fetch('/config');
+                if (!response.ok) {
+                    throw new Error('Failed to load configuration');
+                }
+                fieldConfig = await response.json();
+            } catch (error) {
+                console.error('Error loading configuration:', error);
+                alert('Failed to load field configuration. Please refresh the page.');
+            }
+        }
+
+        function setupEventListeners() {
+            document.getElementById('fileInput').addEventListener('change', handleFile, false);
+            document.getElementById('mappingForm').addEventListener('submit', handleSubmit, false);
+        }
 
         function handleFile(e) {
             const file = e.target.files[0];
@@ -87,32 +114,24 @@
         }
 
         function showMappingUI(headers) {
-            const expectedFields = [
-                "Client Code", "LE ID", "Customer ID", "Customer Name", 
-                "Customer Active", "Account ID", "Account Name", "Account Active"
-            ];
-            const mandatoryFields = [
-                "Client Code", "Customer ID", "Account ID"
-            ];
-
             const mappingContainer = document.getElementById('mappingContainer');
             mappingContainer.innerHTML = '';
 
-            expectedFields.forEach(field => {
+            fieldConfig.fields.forEach(field => {
                 const div = document.createElement('div');
                 div.classList.add('mb-3');
 
                 const label = document.createElement('label');
-                label.textContent = `Map to "${field}": `;
+                label.textContent = `Map to "${field.displayName}": `;
                 label.classList.add('form-label');
-                if (mandatoryFields.includes(field)) {
+                if (field.isMandatory) {
                     label.innerHTML += ' <span class="text-danger">(mandatory)</span>';
                 }
                 
                 const select = document.createElement('select');
-                select.name = `mapping_${field.replace(/ /g, '_')}`;
+                select.name = `mapping_${field.name}`;
                 select.classList.add('form-select');
-                select.dataset.mandatory = mandatoryFields.includes(field) ? "true" : "false";
+                select.dataset.mandatory = field.isMandatory ? "true" : "false";
                 select.addEventListener('change', validateForm);
 
                 const emptyOption = document.createElement('option');

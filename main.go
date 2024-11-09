@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"import/config"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,10 +16,33 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+var fieldConfig *config.FieldConfig
+
+func InitConfig() error {
+	configFile, err := os.ReadFile("config/field_config.json")
+	if err != nil {
+		return fmt.Errorf("error reading config file: %v", err)
+	}
+
+	fieldConfig = &config.FieldConfig{}
+	if err := json.Unmarshal(configFile, fieldConfig); err != nil {
+		return fmt.Errorf("error parsing config file: %v", err)
+	}
+	return nil
+}
+
+func init() {
+	// Call InitConfig in init, but handle the error appropriately for production
+	if err := InitConfig(); err != nil {
+		log.Fatalf("Failed to initialize configuration: %v", err)
+	}
+}
+
 func main() {
 	http.HandleFunc("/", serveUI)
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/download", handleDownload)
+	http.HandleFunc("/config", getFieldConfig)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -27,6 +53,14 @@ func serveUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpl.Execute(w, nil)
+}
+
+func getFieldConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"fields":          fieldConfig.Fields,
+		"mandatoryFields": fieldConfig.GetMandatoryFields(),
+	})
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +108,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Extract field mappings from form
 	fieldMappings := make(map[string]string)
-	order := []string{"Client_Code", "LE_ID", "Customer_ID", "Customer_Name", "Customer_Active", "Account_ID", "Account_Name", "Account_Active"}
+	order := fieldConfig.GetOrderedFields()
 	for key, values := range r.PostForm {
 		if strings.HasPrefix(key, "mapping_") {
 			expectedField := strings.TrimPrefix(key, "mapping_")

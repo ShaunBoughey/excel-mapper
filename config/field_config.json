@@ -1,0 +1,44 @@
+{
+    "fields": [
+        {
+            "name": "Client_Code",
+            "displayName": "Client Code",
+            "isMandatory": true
+        },
+        {
+            "name": "LE_ID",
+            "displayName": "LE ID",
+            "isMandatory": false
+        },
+        {
+            "name": "Customer_ID",
+            "displayName": "Customer ID",
+            "isMandatory": true
+        },
+        {
+            "name": "Customer_Name",
+            "displayName": "Customer Name",
+            "isMandatory": false
+        },
+        {
+            "name": "Customer_Active",
+            "displayName": "Customer Active",
+            "isMandatory": false
+        },
+        {
+            "name": "Account_ID",
+            "displayName": "Account ID",
+            "isMandatory": true
+        },
+        {
+            "name": "Account_Name",
+            "displayName": "Account Name",
+            "isMandatory": false
+        },
+        {
+            "name": "Account_Active",
+            "displayName": "Account Active",
+            "isMandatory": false
+        }
+    ]
+}

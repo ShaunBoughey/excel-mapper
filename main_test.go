@@ -309,14 +309,12 @@ func TestProcessFileInvalidFile(t *testing.T) {
 }
 
 func TestProcessFileCSVOutput(t *testing.T) {
-	// Create a temporary CSV file for testing
 	tempFile, err := os.CreateTemp("./uploads", "test_process_*.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(tempFile.Name())
 
-	// Write headers and data to the temporary CSV file
 	fileContent := `Account Number,Account Active,Customer Name,Customer ID
 	1234,Yes,John Doe,1001
 	2345,No,Jane Smith,1002`
@@ -341,5 +339,153 @@ func TestProcessFileCSVOutput(t *testing.T) {
 
 	if processedFilePath == "" || !strings.HasSuffix(processedFilePath, ".csv") {
 		t.Errorf("expected a valid processed CSV file path, got %v", processedFilePath)
+	}
+}
+
+func TestGetFieldConfig(t *testing.T) {
+	testConfigDir, err := os.MkdirTemp("", "test_config_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testConfigDir)
+
+	originalConfigFile := "config/field_config.json"
+	tempConfigFile := filepath.Join(testConfigDir, "field_config.json")
+
+	tempConfig := `{
+        "fields": [
+            {
+                "name": "Client_Code",
+                "displayName": "Client Code",
+                "isMandatory": true
+            },
+            {
+                "name": "Customer_ID",
+                "displayName": "Customer ID",
+                "isMandatory": true
+            }
+        ]
+    }`
+
+	err = os.WriteFile(tempConfigFile, []byte(tempConfig), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(originalConfigFile); err == nil {
+		backupFile := originalConfigFile + ".backup"
+		if err := os.Rename(originalConfigFile, backupFile); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			os.Remove(originalConfigFile)
+			os.Rename(backupFile, originalConfigFile)
+		}()
+	}
+
+	err = os.MkdirAll(filepath.Dir(originalConfigFile), os.ModePerm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.ReadFile(tempConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = os.WriteFile(originalConfigFile, input, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = InitConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/config", nil)
+	recorder := httptest.NewRecorder()
+	http.HandlerFunc(getFieldConfig).ServeHTTP(recorder, req)
+
+	if status := recorder.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	expectedContentType := "application/json"
+	if contentType := recorder.Header().Get("Content-Type"); contentType != expectedContentType {
+		t.Errorf("handler returned wrong content type: got %v want %v", contentType, expectedContentType)
+	}
+
+	if !strings.Contains(recorder.Body.String(), "Client Code") {
+		t.Errorf("response missing expected field 'Client Code': got %v", recorder.Body.String())
+	}
+}
+
+func TestConfigInitialization(t *testing.T) {
+	testConfigDir, err := os.MkdirTemp("", "test_config_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testConfigDir)
+
+	originalConfigFile := "config/field_config.json"
+
+	validConfig := `{
+        "fields": [
+            {
+                "name": "Client_Code",
+                "displayName": "Client Code",
+                "isMandatory": true
+            },
+            {
+                "name": "Customer_ID",
+                "displayName": "Customer ID",
+                "isMandatory": false
+            }
+        ]
+    }`
+
+	if _, err := os.Stat(originalConfigFile); err == nil {
+		backupFile := originalConfigFile + ".backup"
+		if err := os.Rename(originalConfigFile, backupFile); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			os.Remove(originalConfigFile)
+			os.Rename(backupFile, originalConfigFile)
+		}()
+	}
+
+	err = os.MkdirAll(filepath.Dir(originalConfigFile), os.ModePerm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(originalConfigFile, []byte(validConfig), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = InitConfig()
+	if err != nil {
+		t.Errorf("failed to initialize valid config: %v", err)
+	}
+
+	invalidConfig := `{
+        "fields": [
+            {
+                "name": "Client_Code",
+                "displayName": "Client Code",
+                "isMandatory": true,
+            } // invalid JSON - extra comma
+        ]
+    }`
+
+	err = os.WriteFile(originalConfigFile, []byte(invalidConfig), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = InitConfig()
+	if err == nil {
+		t.Error("expected error with invalid JSON config, got nil")
 	}
 }
