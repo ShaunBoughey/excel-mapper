@@ -211,9 +211,28 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 		missingRow := make([]string, len(order))
 		rowMissingFields := []string{}
 		rowSuccess := true
+
 		for fieldIndex, expectedField := range order {
+			var isMandatory bool
+			for _, field := range fieldConfig.Fields {
+				if field.Name == expectedField {
+					isMandatory = field.IsMandatory
+					break
+				}
+			}
+
+			mappedColumn := fieldMappings[expectedField]
+
+			// If the mapping is empty (no column selected) and not mandatory,
+			// just leave it blank without marking as MISSING
+			if mappedColumn == "" && !isMandatory {
+				processedRow[fieldIndex] = ""
+				missingRow[fieldIndex] = ""
+				continue
+			}
+
 			// Normalize column header for comparison
-			normalizedColumnHeader := strings.TrimSpace(strings.ToLower(fieldMappings[expectedField]))
+			normalizedColumnHeader := strings.TrimSpace(strings.ToLower(mappedColumn))
 
 			// Find the column index for the current mapping
 			columnIndex := -1
@@ -228,9 +247,20 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 				processedRow[fieldIndex] = row[columnIndex]
 				missingRow[fieldIndex] = row[columnIndex]
 			} else {
-				rowMissingFields = append(rowMissingFields, expectedField)
-				missingRow[fieldIndex] = "MISSING"
-				rowSuccess = false
+				// Only add to missing fields if it's mandatory
+				if isMandatory {
+					rowMissingFields = append(rowMissingFields, expectedField)
+					rowSuccess = false
+					missingRow[fieldIndex] = "MISSING"
+				} else {
+					// For non-mandatory fields, only mark as MISSING if a mapping was selected
+					if mappedColumn != "" {
+						missingRow[fieldIndex] = "MISSING"
+					} else {
+						missingRow[fieldIndex] = ""
+					}
+				}
+				processedRow[fieldIndex] = ""
 			}
 		}
 
@@ -242,7 +272,9 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 			missingCount++
 			outputFile.SetSheetRow("MissingData", fmt.Sprintf("A%d", missingRowIndex), &missingRow)
 			missingRowIndex++
-			summaryBuilder.WriteString(fmt.Sprintf("Row %d: Missing fields - %s\n", i+1, strings.Join(rowMissingFields, ", ")))
+			if len(rowMissingFields) > 0 {
+				summaryBuilder.WriteString(fmt.Sprintf("Row %d: Missing mandatory fields - %s\n", i+1, strings.Join(rowMissingFields, ", ")))
+			}
 		}
 	}
 
