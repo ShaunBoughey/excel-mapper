@@ -127,52 +127,61 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
 }
 
-func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
-	var rows [][]string
-	var err error
-
-	// Determine the file type
+// ////////////////////////////// WIP rework ////////////////////////////////////////
+func readInputFile(filePath string) ([][]string, error) {
 	if strings.HasSuffix(filePath, ".xlsx") {
-		// Process as .xlsx file
-		f, err := excelize.OpenFile(filePath)
-		if err != nil {
-			fmt.Println("Error opening file:", err)
-			return "Error opening file.", "Error opening file."
-		}
-
-		sheetName := f.GetSheetName(0)
-		rows, err = f.GetRows(sheetName)
-		if err != nil {
-			fmt.Println("Error reading sheet rows:", err)
-			return "Error reading sheet rows.", "Error reading sheet rows."
-		}
+		return readXLSXFile(filePath)
 	} else if strings.HasSuffix(filePath, ".csv") {
-		// Process as .csv file
-		csvFile, err := os.Open(filePath)
-		if err != nil {
-			fmt.Println("Error opening CSV file:", err)
-			return "Error opening CSV file.", "Error opening CSV file."
-		}
-		defer csvFile.Close()
+		return readCSVFile(filePath)
+	}
+	return nil, fmt.Errorf("unsupported file format")
+}
 
-		reader := csv.NewReader(csvFile)
-		for {
-			record, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				fmt.Println("Error reading CSV file:", err)
-				return "Error reading CSV file.", "Error reading CSV file."
-			}
-			rows = append(rows, record)
+func readXLSXFile(filePath string) ([][]string, error) {
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening xlsx file: %v", err)
+	}
+	defer f.Close()
+
+	sheetName := f.GetSheetName(0)
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("error reading sheet rows: %v", err)
+	}
+	return rows, nil
+}
+
+func readCSVFile(filePath string) ([][]string, error) {
+	csvFile, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening CSV file: %v", err)
+	}
+	defer csvFile.Close()
+
+	var rows [][]string
+	reader := csv.NewReader(csvFile)
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
 		}
-	} else {
-		return "Unsupported file format.", "Unsupported file format."
+		if err != nil {
+			return nil, fmt.Errorf("error reading CSV file: %v", err)
+		}
+		rows = append(rows, record)
+	}
+	return rows, nil
+}
+
+func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
+	rows, err := readInputFile(filePath)
+	if err != nil {
+		return fmt.Sprintf("Error opening file: %v", err), "Error opening file"
 	}
 
 	if len(rows) == 0 {
-		return "No data found in the file.", "No data found in the file."
+		return "No data found in the file.", "No data found in the file"
 	}
 
 	// Proceed with processing the rows (common for both .xlsx and .csv)
