@@ -209,7 +209,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 
 		processedRow := make([]string, len(order))
 		missingRow := make([]string, len(order))
-		rowMissingFields := []string{}
+		rowMissingFields := make([]string, 0, len(order))
 		rowSuccess := true
 
 		for fieldIndex, expectedField := range order {
