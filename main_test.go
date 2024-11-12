@@ -489,3 +489,85 @@ func TestConfigInitialization(t *testing.T) {
 		t.Error("expected error with invalid JSON config, got nil")
 	}
 }
+
+func TestGenerateMarkdownTable(t *testing.T) {
+	headers := []string{"Name", "Age", "City"}
+	rows := [][]string{
+		{"John Doe", "30", "New York"},
+		{"Jane Smith", "25", "Los Angeles"},
+		{"Bob | Johnson", "35", "Chicago"}, // Test pipe character escaping
+	}
+
+	result := generateMarkdownTable(headers, rows)
+
+	expected := "| Name | Age | City | \n| --- | --- | --- |\n| John Doe | 30 | New York | \n| Jane Smith | 25 | Los Angeles | \n| Bob \\| Johnson | 35 | Chicago | \n"
+
+	if result != expected {
+		t.Errorf("Markdown table generation failed.\nExpected (%v):\n%s\nGot (%v):\n%s",
+			[]byte(expected), expected, []byte(result), result)
+	}
+}
+
+func TestProcessFileMarkdownOutput(t *testing.T) {
+	tempFile, err := os.CreateTemp("./uploads", "test_process_*.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	excelFile := excelize.NewFile()
+	sheetName := "Sheet1"
+	excelFile.SetSheetName("Sheet1", sheetName)
+
+	headers := []string{"Account Number", "Account Active", "Customer Name"}
+	data := [][]string{
+		{"1234", "Yes", "John Doe"},
+		{"5678", "No", "Jane Smith"},
+	}
+
+	for i, header := range headers {
+		cell := string(rune('A'+i)) + "1"
+		excelFile.SetCellValue(sheetName, cell, header)
+	}
+
+	for rowIndex, row := range data {
+		for colIndex, value := range row {
+			cell := string(rune('A'+colIndex)) + string(rune('2'+rowIndex))
+			excelFile.SetCellValue(sheetName, cell, value)
+		}
+	}
+
+	if err := excelFile.SaveAs(tempFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+
+	fieldMappings := map[string]string{
+		"Account Number": "Account Number",
+		"Account Active": "Account Active",
+		"Customer Name":  "Customer Name",
+	}
+	order := []string{"Account Number", "Account Active", "Customer Name"}
+
+	summary, outputPath := processFile(tempFile.Name(), fieldMappings, order, "markdown")
+
+	if !strings.Contains(summary, "Total Rows Processed") {
+		t.Error("Summary missing expected content")
+	}
+
+	if !strings.HasSuffix(outputPath, ".md") {
+		t.Error("Expected markdown file output")
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal("Failed to read output file")
+	}
+
+	markdownContent := string(content)
+	if !strings.Contains(markdownContent, "# Data Processing Report") {
+		t.Error("Markdown output missing expected header")
+	}
+	if !strings.Contains(markdownContent, "| Account Number |") {
+		t.Error("Markdown output missing expected table header")
+	}
+}

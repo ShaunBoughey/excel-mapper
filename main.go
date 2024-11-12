@@ -345,6 +345,70 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 		return summaryBuilder.String(), outputFilePath
 	}
 
+	if outputFormat == "markdown" {
+		// Output processed rows to markdown
+		outputFilePath := "./uploads/processed_data.md"
+		mdFile, err := os.Create(outputFilePath)
+		if err != nil {
+			fmt.Println("Error creating markdown file:", err)
+			return summaryBuilder.String(), ""
+		}
+		defer mdFile.Close()
+
+		var processedRows [][]string
+		processedRows = append(processedRows, order) // Add headers
+		for rowIndex := 2; rowIndex < outputRowIndex; rowIndex++ {
+			row := make([]string, len(order))
+			for j := range row {
+				cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+				row[j] = cell
+			}
+			processedRows = append(processedRows, row)
+		}
+
+		markdownContent := generateMarkdownTable(order, processedRows[1:])
+
+		// Add summary section to markdown
+		fullContent := fmt.Sprintf("# Data Processing Report\n\n## Summary\n\n```\n%s\n```\n\n## Processed Data\n\n%s",
+			summaryBuilder.String(), markdownContent)
+
+		_, err = mdFile.WriteString(fullContent)
+		if err != nil {
+			fmt.Println("Error writing markdown content:", err)
+			return summaryBuilder.String(), ""
+		}
+
+		// Save missing rows to separate markdown file
+		missingFilePath := "./uploads/missing_data.md"
+		missingMdFile, err := os.Create(missingFilePath)
+		if err != nil {
+			fmt.Println("Error creating missing data markdown file:", err)
+			return summaryBuilder.String(), outputFilePath
+		}
+		defer missingMdFile.Close()
+
+		var missingRows [][]string
+		missingRows = append(missingRows, order)
+		for rowIndex := 2; rowIndex < missingRowIndex; rowIndex++ {
+			row := make([]string, len(order))
+			for j := range row {
+				cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+				row[j] = cell
+			}
+			missingRows = append(missingRows, row)
+		}
+
+		missingMarkdownContent := generateMarkdownTable(order, missingRows[1:])
+		missingFullContent := fmt.Sprintf("# Missing Data Report\n\n## Missing Records\n\n%s", missingMarkdownContent)
+
+		_, err = missingMdFile.WriteString(missingFullContent)
+		if err != nil {
+			fmt.Println("Error writing missing data markdown content:", err)
+		}
+
+		return summaryBuilder.String(), outputFilePath
+	}
+
 	outputFilePath := "./uploads/processed_data.xlsx"
 	err = outputFile.SaveAs(outputFilePath)
 	if err != nil {
@@ -353,6 +417,33 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	}
 
 	return summaryBuilder.String(), outputFilePath
+}
+
+func generateMarkdownTable(headers []string, rows [][]string) string {
+	var sb strings.Builder
+
+	sb.WriteString("| ")
+	for _, header := range headers {
+		sb.WriteString(header + " | ")
+	}
+	sb.WriteString("\n|")
+
+	for range headers {
+		sb.WriteString(" --- |")
+	}
+	sb.WriteString("\n")
+
+	// Write data rows
+	for _, row := range rows {
+		sb.WriteString("| ")
+		for _, cell := range row {
+			escapedCell := strings.ReplaceAll(cell, "|", "\\|")
+			sb.WriteString(escapedCell + " | ")
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request) {

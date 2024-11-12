@@ -32,6 +32,7 @@
                                 <select name="outputFormat" id="outputFormat" class="form-select">
                                     <option value="excel">Excel (.xlsx)</option>
                                     <option value="csv">CSV (pipe delimited)</option>
+                                    <option value="markdown">Markdown (.md)</option>
                                 </select>
                             </div>
 
@@ -225,18 +226,28 @@
             summaryContent.textContent = summary;
 
             const outputFormat = document.getElementById('outputFormat').value;
-            if (outputFormat === 'csv') {
-                downloadProcessedLink.href = '/download?file=processed_data.csv';
-                downloadProcessedLink.download = 'processed_data.csv';
-                downloadMissingLink.href = '/download?file=missing_data.csv';
-                downloadMissingLink.download = 'missing_data.csv';
-                downloadProcessedLink.classList.remove('d-none');
-                downloadMissingLink.classList.remove('d-none');
-            } else {
-                downloadProcessedLink.href = '/download?file=processed_data.xlsx';
-                downloadProcessedLink.download = 'processed_data.xlsx';
-                downloadProcessedLink.classList.remove('d-none');
-                downloadMissingLink.classList.add('d-none');
+            switch(outputFormat) {
+                case 'csv':
+                    downloadProcessedLink.href = '/download?file=processed_data.csv';
+                    downloadProcessedLink.download = 'processed_data.csv';
+                    downloadMissingLink.href = '/download?file=missing_data.csv';
+                    downloadMissingLink.download = 'missing_data.csv';
+                    downloadProcessedLink.classList.remove('d-none');
+                    downloadMissingLink.classList.remove('d-none');
+                    break;
+                case 'markdown':
+                    downloadProcessedLink.href = '/download?file=processed_data.md';
+                    downloadProcessedLink.download = 'processed_data.md';
+                    downloadMissingLink.href = '/download?file=missing_data.md';
+                    downloadMissingLink.download = 'missing_data.md';
+                    downloadProcessedLink.classList.remove('d-none');
+                    downloadMissingLink.classList.remove('d-none');
+                    break;
+                default:
+                    downloadProcessedLink.href = '/download?file=processed_data.xlsx';
+                    downloadProcessedLink.download = 'processed_data.xlsx';
+                    downloadProcessedLink.classList.remove('d-none');
+                    downloadMissingLink.classList.add('d-none');
             }
         }
     </script>
