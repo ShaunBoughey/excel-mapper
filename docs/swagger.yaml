@@ -1,0 +1,141 @@
+basePath: /api/v1
+consumes:
+- multipart/form-data
+definitions:
+  main.ErrorResponse:
+    properties:
+      error:
+        example: Invalid field mappings format
+        type: string
+    type: object
+  main.FieldConfigResponse:
+    properties:
+      fields:
+        items:
+          properties:
+            displayName:
+              example: Client Code
+              type: string
+            isMandatory:
+              example: true
+              type: boolean
+            name:
+              example: Client_Code
+              type: string
+          type: object
+        type: array
+      mandatoryFields:
+        example:
+        - Client_Code
+        - Customer_ID
+        - Account_ID
+        items:
+          type: string
+        type: array
+    type: object
+  main.ProcessResponse:
+    properties:
+      contentType:
+        example: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        type: string
+      fileName:
+        example: processed_data.xlsx
+        type: string
+      summary:
+        example: 'Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing
+          Data: 0'
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    name: Github
+    url: https://github.com/ShaunBoughey/excel-mapper
+  description: API for processing and mapping fields in CSV and XLSX files.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  title: Field Mapping API
+  version: "1.0"
+paths:
+  /config:
+    get:
+      consumes:
+      - application/json
+      description: Get the configuration of all fields, including mandatory fields
+        and field order
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.FieldConfigResponse'
+        "405":
+          description: Method Not Allowed
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      summary: Get field configuration
+      tags:
+      - configuration
+  /process:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a file and process it according to provided field mappings
+      parameters:
+      - description: File to process (CSV or XLSX)
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: JSON string of field mappings
+        in: formData
+        name: mappings
+        required: true
+        type: string
+      - default: xlsx
+        description: Output format
+        enum:
+        - xlsx
+        - csv
+        - markdown
+        in: formData
+        name: outputFormat
+        type: string
+      produces:
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      - text/csv
+      - text/markdown
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition:
+              description: attachment; filename=\"processed_data.xlsx\
+              type: string
+            Content-Type:
+              description: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+              type: string
+            X-Processing-Summary:
+              description: 'Total Rows Processed: 1000 Successful Rows: 1000 Rows
+                with Missing Data: 0'
+              type: string
+          schema:
+            $ref: '#/definitions/main.ProcessResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
+      summary: Process file with field mappings
+      tags:
+      - processing
+produces:
+- application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+- text/csv
+- text/markdown
+swagger: "2.0"

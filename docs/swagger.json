@@ -1,0 +1,200 @@
+{
+    "consumes": [
+        "multipart/form-data"
+    ],
+    "produces": [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv",
+        "text/markdown"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "API for processing and mapping fields in CSV and XLSX files.",
+        "title": "Field Mapping API",
+        "contact": {
+            "name": "Github",
+            "url": "https://github.com/ShaunBoughey/excel-mapper"
+        },
+        "license": {
+            "name": "Apache 2.0",
+            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/config": {
+            "get": {
+                "description": "Get the configuration of all fields, including mandatory fields and field order",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Get field configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.FieldConfigResponse"
+                        }
+                    },
+                    "405": {
+                        "description": "Method Not Allowed",
+                        "schema": {
+                            "$ref": "#/definitions/main.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/process": {
+            "post": {
+                "description": "Upload a file and process it according to provided field mappings",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "text/csv",
+                    "text/markdown"
+                ],
+                "tags": [
+                    "processing"
+                ],
+                "summary": "Process file with field mappings",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "File to process (CSV or XLSX)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "JSON string of field mappings",
+                        "name": "mappings",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "xlsx",
+                            "csv",
+                            "markdown"
+                        ],
+                        "type": "string",
+                        "default": "xlsx",
+                        "description": "Output format",
+                        "name": "outputFormat",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.ProcessResponse"
+                        },
+                        "headers": {
+                            "Content-Disposition": {
+                                "type": "string",
+                                "description": "attachment; filename=\\\"processed_data.xlsx\\"
+                            },
+                            "Content-Type": {
+                                "type": "string",
+                                "description": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            },
+                            "X-Processing-Summary": {
+                                "type": "string",
+                                "description": "Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/main.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "main.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "example": "Invalid field mappings format"
+                }
+            }
+        },
+        "main.FieldConfigResponse": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "displayName": {
+                                "type": "string",
+                                "example": "Client Code"
+                            },
+                            "isMandatory": {
+                                "type": "boolean",
+                                "example": true
+                            },
+                            "name": {
+                                "type": "string",
+                                "example": "Client_Code"
+                            }
+                        }
+                    }
+                },
+                "mandatoryFields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "Client_Code",
+                        "Customer_ID",
+                        "Account_ID"
+                    ]
+                }
+            }
+        },
+        "main.ProcessResponse": {
+            "type": "object",
+            "properties": {
+                "contentType": {
+                    "type": "string",
+                    "example": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                },
+                "fileName": {
+                    "type": "string",
+                    "example": "processed_data.xlsx"
+                },
+                "summary": {
+                    "type": "string",
+                    "example": "Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"
+                }
+            }
+        }
+    }
+}

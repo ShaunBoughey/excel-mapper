@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -569,5 +570,131 @@ func TestProcessFileMarkdownOutput(t *testing.T) {
 	}
 	if !strings.Contains(markdownContent, "| Account Number |") {
 		t.Error("Markdown output missing expected table header")
+	}
+}
+
+func TestHandleAPIConfig(t *testing.T) {
+	// Initialize config
+	if err := InitConfig(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
+	// Create a request to pass to our handler
+	req, err := http.NewRequest("GET", "/api/v1/config", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a ResponseRecorder to record the response
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(handleAPIConfig)
+
+	// Call the handler
+	handler.ServeHTTP(rr, req)
+
+	// Check the status code
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	// Check the response body contains expected fields
+	var response FieldConfigResponse
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Errorf("Failed to decode response: %v", err)
+	}
+
+	// Verify mandatory fields exist
+	if len(response.MandatoryFields) == 0 {
+		t.Error("Expected mandatory fields in response")
+	}
+
+	// Verify fields array exists
+	if len(response.Fields) == 0 {
+		t.Error("Expected fields in response")
+	}
+}
+
+func TestHandleAPIProcess(t *testing.T) {
+	// Initialize config
+	if err := InitConfig(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
+	// Create a buffer to write our multipart form to
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+
+	// Add the file to the form
+	file, err := os.Open("uploads/synthetic_test_data.xlsx")
+	if err != nil {
+		t.Fatalf("Failed to open test file: %v", err)
+	}
+	defer file.Close()
+
+	fw, err := w.CreateFormFile("file", "synthetic_test_data.xlsx")
+	if err != nil {
+		t.Fatalf("Failed to create form file: %v", err)
+	}
+	if _, err := io.Copy(fw, file); err != nil {
+		t.Fatalf("Failed to copy file content: %v", err)
+	}
+
+	// Add the mappings to the form
+	mappings := map[string]string{
+		"Client_Code": "Client Code",
+		"Customer_ID": "Customer ID",
+		"Account_ID":  "Account Number",
+	}
+	mappingsJSON, err := json.Marshal(mappings)
+	if err != nil {
+		t.Fatalf("Failed to marshal mappings: %v", err)
+	}
+	if err := w.WriteField("mappings", string(mappingsJSON)); err != nil {
+		t.Fatalf("Failed to write mappings field: %v", err)
+	}
+
+	// Add the output format to the form
+	if err := w.WriteField("outputFormat", "xlsx"); err != nil {
+		t.Fatalf("Failed to write output format field: %v", err)
+	}
+
+	// Close the writer
+	w.Close()
+
+	// Create a request with the form
+	req, err := http.NewRequest("POST", "/api/v1/process", &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	// Create a ResponseRecorder
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(handleAPIProcess)
+
+	// Call the handler
+	handler.ServeHTTP(rr, req)
+
+	// Check the status code
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	// Check the response headers
+	if contentType := rr.Header().Get("Content-Type"); contentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
+		t.Errorf("handler returned wrong content type: got %v", contentType)
+	}
+
+	if disposition := rr.Header().Get("Content-Disposition"); disposition == "" {
+		t.Error("Expected Content-Disposition header")
+	}
+
+	if summary := rr.Header().Get("X-Processing-Summary"); summary == "" {
+		t.Error("Expected X-Processing-Summary header")
+	}
+
+	// Check that we got some file content
+	if len(rr.Body.Bytes()) == 0 {
+		t.Error("Expected file content in response")
 	}
 }

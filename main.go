@@ -13,10 +13,31 @@ import (
 	"path/filepath"
 	"strings"
 
+	_ "import/docs" // swagger docs
+
+	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/xuri/excelize/v2"
 )
 
 var fieldConfig *config.FieldConfig
+
+// @title           Field Mapping API
+// @version         1.0
+// @description     API for processing and mapping fields in CSV and XLSX files.
+
+// @contact.name   Github
+// @contact.url    https://github.com/ShaunBoughey/excel-mapper
+
+// @license.name  Apache 2.0
+// @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
+
+// @host      localhost:8080
+// @BasePath  /api/v1
+
+// @accept multipart/form-data
+// @produce application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+// @produce text/csv
+// @produce text/markdown
 
 func InitConfig() error {
 	configFile, err := os.ReadFile("config/field_config.json")
@@ -39,10 +60,28 @@ func init() {
 }
 
 func main() {
+	// UI routes
 	http.HandleFunc("/", serveUI)
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/download", handleDownload)
 	http.HandleFunc("/config", getFieldConfig)
+
+	// API routes
+	http.HandleFunc("/api/v1/config", handleAPIConfig)
+	http.HandleFunc("/api/v1/process", handleAPIProcess)
+
+	// Serve swagger files
+	fs := http.FileServer(http.Dir("docs"))
+	http.Handle("/docs/", http.StripPrefix("/docs/", fs))
+
+	// Swagger UI handler
+	http.HandleFunc("/swagger/", httpSwagger.Handler(
+		httpSwagger.URL("/docs/swagger.json"),
+		httpSwagger.DeepLinking(true),
+		httpSwagger.DocExpansion("none"),
+		httpSwagger.DomID("swagger-ui"),
+	))
+
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -52,7 +91,13 @@ func serveUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not load UI", http.StatusInternalServerError)
 		return
 	}
-	tmpl.Execute(w, nil)
+
+	// Add base URL to template data
+	data := map[string]interface{}{
+		"BaseURL": "http://" + r.Host,
+	}
+
+	tmpl.Execute(w, data)
 }
 
 func getFieldConfig(w http.ResponseWriter, r *http.Request) {
@@ -475,4 +520,158 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+type FieldConfigResponse struct {
+	Fields []struct {
+		Name        string `json:"name" example:"Client_Code"`
+		DisplayName string `json:"displayName" example:"Client Code"`
+		IsMandatory bool   `json:"isMandatory" example:"true"`
+	} `json:"fields"`
+	MandatoryFields []string `json:"mandatoryFields" example:"Client_Code,Customer_ID,Account_ID"`
+}
+
+// @Summary     Get field configuration
+// @Description Get the configuration of all fields, including mandatory fields and field order
+// @Tags        configuration
+// @Accept      json
+// @Produce     json
+// @Success     200 {object} FieldConfigResponse
+// @Failure     405 {object} ErrorResponse
+// @Router      /config [get]
+func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"fields":          fieldConfig.Fields,
+		"mandatoryFields": fieldConfig.GetMandatoryFields(),
+		"orderedFields":   fieldConfig.GetOrderedFields(),
+	})
+}
+
+// ProcessResponse represents the file processing response
+type ProcessResponse struct {
+	Summary     string `json:"summary" example:"Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"`
+	FileName    string `json:"fileName" example:"processed_data.xlsx"`
+	ContentType string `json:"contentType" example:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"`
+}
+
+// @Summary      Process file with field mappings
+// @Description  Upload a file and process it according to provided field mappings
+// @Tags         processing
+// @Accept       multipart/form-data
+// @Produce      application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+// @Produce      text/csv
+// @Produce      text/markdown
+// @Param        file formData file true "File to process (CSV or XLSX)"
+// @Param        mappings formData string true "JSON string of field mappings" example:"{\"Client_Code\":\"Client Code\",\"Customer_ID\":\"Customer ID\",\"Account_ID\":\"Account Number\"}"
+// @Param        outputFormat formData string false "Output format" Enums(xlsx,csv,markdown) default(xlsx)
+// @Success      200 {object} ProcessResponse
+// @Header       200 {string} X-Processing-Summary "Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"
+// @Header       200 {string} Content-Type "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+// @Header       200 {string} Content-Disposition "attachment; filename=\"processed_data.xlsx\""
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /process [post]
+func handleAPIProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse multipart form
+	err := r.ParseMultipartForm(10 << 20) // 10MB limit
+	if err != nil {
+		http.Error(w, "Unable to parse form", http.StatusBadRequest)
+		return
+	}
+
+	// Get the file
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		sendJSONError(w, "No file uploaded", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Validate file type
+	if !strings.HasSuffix(handler.Filename, ".xlsx") && !strings.HasSuffix(handler.Filename, ".csv") {
+		sendJSONError(w, "Invalid file type. Only .csv and .xlsx files are allowed", http.StatusBadRequest)
+		return
+	}
+
+	// Get field mappings from JSON
+	var fieldMappings map[string]string
+	mappingsStr := r.FormValue("mappings")
+	if err := json.Unmarshal([]byte(mappingsStr), &fieldMappings); err != nil {
+		sendJSONError(w, "Invalid field mappings format", http.StatusBadRequest)
+		return
+	}
+
+	// Save file temporarily
+	tempDir := "./uploads"
+	os.MkdirAll(tempDir, os.ModePerm)
+	tempFilePath := filepath.Join(tempDir, handler.Filename)
+	tempFile, err := os.Create(tempFilePath)
+	if err != nil {
+		sendJSONError(w, "Unable to save file", http.StatusInternalServerError)
+		return
+	}
+	defer tempFile.Close()
+
+	_, err = tempFile.ReadFrom(file)
+	if err != nil {
+		sendJSONError(w, "Unable to save file content", http.StatusInternalServerError)
+		return
+	}
+
+	// Get output format
+	outputFormat := r.FormValue("outputFormat")
+	if outputFormat == "" {
+		outputFormat = "xlsx" // Default format
+	}
+
+	// Process the file
+	order := fieldConfig.GetOrderedFields()
+	summary, outputPath := processFile(tempFilePath, fieldMappings, order, outputFormat)
+
+	// Check if the output file exists
+	if _, err := os.Stat(outputPath); err != nil {
+		sendJSONError(w, "Failed to generate output file", http.StatusInternalServerError)
+		return
+	}
+
+	// Read the file
+	fileContent, err := os.ReadFile(outputPath)
+	if err != nil {
+		sendJSONError(w, "Failed to read output file", http.StatusInternalServerError)
+		return
+	}
+
+	// Set appropriate headers based on output format
+	contentType := "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	if outputFormat == "csv" {
+		contentType = "text/csv"
+	} else if outputFormat == "markdown" {
+		contentType = "text/markdown"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(outputPath)))
+	w.Header().Set("X-Processing-Summary", summary)
+	w.Write(fileContent)
+}
+
+func sendJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+type ErrorResponse struct {
+	Error string `json:"error" example:"Invalid field mappings format"`
 }
