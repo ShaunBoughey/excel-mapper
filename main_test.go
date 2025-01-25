@@ -801,3 +801,269 @@ func TestHandleAPIProcess(t *testing.T) {
 		})
 	}
 }
+
+func TestUIRoutesWithAPIKey(t *testing.T) {
+	// UI routes should work with or without API key
+	routes := []string{"/", "/upload", "/config"}
+	apiKey := "test-api-key-1"
+
+	for _, route := range routes {
+		t.Run(route, func(t *testing.T) {
+			// Test with API key
+			req := httptest.NewRequest("GET", route, nil)
+			req.Header.Set("X-API-Key", apiKey)
+			rr := httptest.NewRecorder()
+			http.DefaultServeMux.ServeHTTP(rr, req)
+
+			if status := rr.Code; status == http.StatusUnauthorized {
+				t.Errorf("UI route %s failed with API key: got status %v", route, status)
+			}
+
+			// Test without API key
+			req = httptest.NewRequest("GET", route, nil)
+			rr = httptest.NewRecorder()
+			http.DefaultServeMux.ServeHTTP(rr, req)
+
+			if status := rr.Code; status == http.StatusUnauthorized {
+				t.Errorf("UI route %s failed without API key: got status %v", route, status)
+			}
+		})
+	}
+}
+
+func TestHandleAPIProcessInvalidMethod(t *testing.T) {
+	// Initialize API keys
+	auth.InitAPIKeys()
+
+	req := httptest.NewRequest("GET", "/api/v1/process", nil)
+	req.Header.Set("X-API-Key", "test-api-key-1")
+	rr := httptest.NewRecorder()
+	handler := auth.RequireAPIKey(handleAPIProcess)
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusMethodNotAllowed {
+		t.Errorf("handler allowed wrong HTTP method: got %v want %v", status, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleAPIProcessMalformedJSON(t *testing.T) {
+	// Initialize API keys
+	auth.InitAPIKeys()
+
+	// Create a test file
+	fileContent := "Account Number,Account Active\n1234,Yes"
+	tempFile, err := os.CreateTemp("./uploads", "test_upload_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	if _, err := tempFile.WriteString(fileContent); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a multipart form with malformed JSON
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Add the file
+	file, err := os.Open(tempFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	part, err := writer.CreateFormFile("file", filepath.Base(tempFile.Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add malformed JSON mappings
+	malformedJSON := `{"key": "value", }` // Invalid JSON
+	if err := writer.WriteField("mappings", malformedJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	writer.Close()
+
+	// Create and send request
+	req := httptest.NewRequest("POST", "/api/v1/process", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-API-Key", "test-api-key-1")
+
+	rr := httptest.NewRecorder()
+	handler := auth.RequireAPIKey(handleAPIProcess)
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusBadRequest {
+		t.Errorf("handler didn't reject malformed JSON: got %v want %v", status, http.StatusBadRequest)
+	}
+
+	if !strings.Contains(rr.Body.String(), "Invalid field mappings format") {
+		t.Errorf("handler didn't return expected error message: got %v", rr.Body.String())
+	}
+}
+
+func TestHandleAPIProcessEmptyFile(t *testing.T) {
+	// Initialize API keys
+	auth.InitAPIKeys()
+
+	// Create an empty file
+	tempFile, err := os.CreateTemp("./uploads", "test_upload_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	// Create a multipart form
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Add the empty file
+	file, err := os.Open(tempFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	part, err := writer.CreateFormFile("file", filepath.Base(tempFile.Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add valid mappings
+	mappings := map[string]string{
+		"Account_Number": "Account Number",
+	}
+	mappingsJSON, err := json.Marshal(mappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("mappings", string(mappingsJSON)); err != nil {
+		t.Fatal(err)
+	}
+
+	writer.Close()
+
+	// Create and send request
+	req := httptest.NewRequest("POST", "/api/v1/process", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-API-Key", "test-api-key-1")
+
+	rr := httptest.NewRecorder()
+	handler := auth.RequireAPIKey(handleAPIProcess)
+	handler.ServeHTTP(rr, req)
+
+	// The exact response code might depend on your implementation
+	// but it should indicate an error condition
+	if status := rr.Code; status == http.StatusOK {
+		t.Error("handler accepted empty file without error")
+	}
+}
+
+func TestHandleAPIProcessDifferentOutputFormats(t *testing.T) {
+	// Initialize config and API keys
+	if err := InitConfig(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
+	auth.InitAPIKeys()
+
+	// Create a test file
+	fileContent := `Account Number,Account Active,Customer Name
+1234,Yes,John Doe
+5678,No,Jane Smith`
+
+	tempFile, err := os.CreateTemp("./uploads", "test_upload_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	if _, err := tempFile.WriteString(fileContent); err != nil {
+		t.Fatal(err)
+	}
+
+	outputFormats := []struct {
+		format      string
+		contentType string
+	}{
+		{"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+		{"csv", "text/csv"},
+		{"markdown", "text/markdown"},
+	}
+
+	for _, of := range outputFormats {
+		t.Run(of.format, func(t *testing.T) {
+			// Create a multipart form
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+
+			// Add the file
+			file, err := os.Open(tempFile.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+
+			part, err := writer.CreateFormFile("file", filepath.Base(tempFile.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.Copy(part, file); err != nil {
+				t.Fatal(err)
+			}
+
+			// Add mappings
+			mappings := map[string]string{
+				"Account_Number": "Account Number",
+				"Account_Active": "Account Active",
+				"Customer_Name":  "Customer Name",
+			}
+			mappingsJSON, err := json.Marshal(mappings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.WriteField("mappings", string(mappingsJSON)); err != nil {
+				t.Fatal(err)
+			}
+
+			// Add output format
+			if err := writer.WriteField("outputFormat", of.format); err != nil {
+				t.Fatal(err)
+			}
+
+			writer.Close()
+
+			// Create and send request
+			req := httptest.NewRequest("POST", "/api/v1/process", &body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			req.Header.Set("X-API-Key", "test-api-key-1")
+
+			rr := httptest.NewRecorder()
+			handler := auth.RequireAPIKey(handleAPIProcess)
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != http.StatusOK {
+				t.Errorf("handler failed for format %s: got status %v", of.format, status)
+			}
+
+			if contentType := rr.Header().Get("Content-Type"); contentType != of.contentType {
+				t.Errorf("wrong content type for format %s: got %v want %v", of.format, contentType, of.contentType)
+			}
+
+			if disposition := rr.Header().Get("Content-Disposition"); disposition == "" {
+				t.Error("Expected Content-Disposition header")
+			}
+
+			if summary := rr.Header().Get("X-Processing-Summary"); summary == "" {
+				t.Error("Expected X-Processing-Summary header")
+			}
+		})
+	}
+}
