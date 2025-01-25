@@ -98,7 +98,7 @@ func main() {
 }
 
 func serveUI(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFiles("field_mapping_ui.html")
+	tmpl, err := template.ParseFiles("ui/index.html")
 	if err != nil {
 		http.Error(w, "Could not load UI", http.StatusInternalServerError)
 		return
