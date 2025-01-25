@@ -32,6 +32,11 @@ const docTemplate = `{
     "paths": {
         "/config": {
             "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Get the configuration of all fields, including mandatory fields and field order",
                 "consumes": [
                     "application/json"
@@ -50,6 +55,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/main.FieldConfigResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/main.ErrorResponse"
+                        }
+                    },
                     "405": {
                         "description": "Method Not Allowed",
                         "schema": {
@@ -61,6 +72,11 @@ const docTemplate = `{
         },
         "/process": {
             "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
                 "description": "Upload a file and process it according to provided field mappings",
                 "consumes": [
                     "multipart/form-data"
@@ -125,6 +141,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/main.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/main.ErrorResponse"
                         }
@@ -201,6 +223,14 @@ const docTemplate = `{
                     "example": "Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"
                 }
             }
+        }
+    },
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "description": "API key authentication required for all API endpoints",
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header"
         }
     }
 }`

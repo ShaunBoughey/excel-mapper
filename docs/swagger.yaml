@@ -71,10 +71,16 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/main.FieldConfigResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
         "405":
           description: Method Not Allowed
           schema:
             $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
       summary: Get field configuration
       tags:
       - configuration
@@ -127,10 +133,16 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/main.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/main.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/main.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
       summary: Process file with field mappings
       tags:
       - processing
@@ -138,4 +150,10 @@ produces:
 - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 - text/csv
 - text/markdown
+securityDefinitions:
+  ApiKeyAuth:
+    description: API key authentication required for all API endpoints
+    in: header
+    name: X-API-Key
+    type: apiKey
 swagger: "2.0"

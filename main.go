@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"import/auth"
 	"import/config"
 	"io"
 	"log"
@@ -34,6 +35,11 @@ var fieldConfig *config.FieldConfig
 // @host      localhost:8080
 // @BasePath  /api/v1
 
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name X-API-Key
+// @description API key authentication required for all API endpoints
+
 // @accept multipart/form-data
 // @produce application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 // @produce text/csv
@@ -57,6 +63,9 @@ func init() {
 	if err := InitConfig(); err != nil {
 		log.Fatalf("Failed to initialize configuration: %v", err)
 	}
+
+	// Initialize API keys
+	auth.InitAPIKeys()
 }
 
 func main() {
@@ -66,9 +75,9 @@ func main() {
 	http.HandleFunc("/download", handleDownload)
 	http.HandleFunc("/config", getFieldConfig)
 
-	// API routes
-	http.HandleFunc("/api/v1/config", handleAPIConfig)
-	http.HandleFunc("/api/v1/process", handleAPIProcess)
+	// API routes with authentication
+	http.HandleFunc("/api/v1/config", auth.RequireAPIKey(handleAPIConfig))
+	http.HandleFunc("/api/v1/process", auth.RequireAPIKey(handleAPIProcess))
 
 	// Serve swagger files
 	fs := http.FileServer(http.Dir("docs"))
@@ -82,7 +91,10 @@ func main() {
 		httpSwagger.DomID("swagger-ui"),
 	))
 
-	http.ListenAndServe(":8080", nil)
+	log.Printf("Server starting on http://localhost:8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 }
 
 func serveUI(w http.ResponseWriter, r *http.Request) {
@@ -536,8 +548,10 @@ type FieldConfigResponse struct {
 // @Tags        configuration
 // @Accept      json
 // @Produce     json
+// @Security    ApiKeyAuth
 // @Success     200 {object} FieldConfigResponse
-// @Failure     405 {object} ErrorResponse
+// @Failure     401 {object} ErrorResponse "Unauthorized"
+// @Failure     405 {object} ErrorResponse "Method Not Allowed"
 // @Router      /config [get]
 func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -567,6 +581,7 @@ type ProcessResponse struct {
 // @Produce      application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 // @Produce      text/csv
 // @Produce      text/markdown
+// @Security     ApiKeyAuth
 // @Param        file formData file true "File to process (CSV or XLSX)"
 // @Param        mappings formData string true "JSON string of field mappings" example:"{\"Client_Code\":\"Client Code\",\"Customer_ID\":\"Customer ID\",\"Account_ID\":\"Account Number\"}"
 // @Param        outputFormat formData string false "Output format" Enums(xlsx,csv,markdown) default(xlsx)
@@ -574,8 +589,9 @@ type ProcessResponse struct {
 // @Header       200 {string} X-Processing-Summary "Total Rows Processed: 1000 Successful Rows: 1000 Rows with Missing Data: 0"
 // @Header       200 {string} Content-Type "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 // @Header       200 {string} Content-Disposition "attachment; filename=\"processed_data.xlsx\""
-// @Failure      400 {object} ErrorResponse
-// @Failure      500 {object} ErrorResponse
+// @Failure      400 {object} ErrorResponse "Bad Request"
+// @Failure      401 {object} ErrorResponse "Unauthorized"
+// @Failure      500 {object} ErrorResponse "Internal Server Error"
 // @Router       /process [post]
 func handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

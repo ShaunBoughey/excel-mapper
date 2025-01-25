@@ -12,8 +12,15 @@ import (
 	"strings"
 	"testing"
 
+	"import/auth"
+
 	"github.com/xuri/excelize/v2"
 )
+
+func init() {
+	// Set test API key
+	os.Setenv("API_KEYS", "test-api-key-1,test-api-key-2")
+}
 
 func TestServeUI(t *testing.T) {
 	req, err := http.NewRequest("GET", "/", nil)
@@ -579,122 +586,218 @@ func TestHandleAPIConfig(t *testing.T) {
 		t.Fatalf("Failed to initialize config: %v", err)
 	}
 
-	// Create a request to pass to our handler
-	req, err := http.NewRequest("GET", "/api/v1/config", nil)
-	if err != nil {
-		t.Fatal(err)
+	// Initialize API keys
+	auth.InitAPIKeys()
+
+	testCases := []struct {
+		name          string
+		apiKey        string
+		expectedCode  int
+		expectedError string
+	}{
+		{
+			name:         "Valid API Key",
+			apiKey:       "test-api-key-1",
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:          "Missing API Key",
+			apiKey:        "",
+			expectedCode:  http.StatusUnauthorized,
+			expectedError: "API key is missing",
+		},
+		{
+			name:          "Invalid API Key",
+			apiKey:        "invalid-key",
+			expectedCode:  http.StatusUnauthorized,
+			expectedError: "Invalid API key",
+		},
 	}
 
-	// Create a ResponseRecorder to record the response
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(handleAPIConfig)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a request
+			req, err := http.NewRequest("GET", "/api/v1/config", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	// Call the handler
-	handler.ServeHTTP(rr, req)
+			// Add API key if present
+			if tc.apiKey != "" {
+				req.Header.Set("X-API-Key", tc.apiKey)
+			}
 
-	// Check the status code
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
-	}
+			// Create a ResponseRecorder
+			rr := httptest.NewRecorder()
+			handler := auth.RequireAPIKey(handleAPIConfig)
 
-	// Check the response body contains expected fields
-	var response FieldConfigResponse
-	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
-		t.Errorf("Failed to decode response: %v", err)
-	}
+			// Call the handler
+			handler.ServeHTTP(rr, req)
 
-	// Verify mandatory fields exist
-	if len(response.MandatoryFields) == 0 {
-		t.Error("Expected mandatory fields in response")
-	}
+			// Check the status code
+			if status := rr.Code; status != tc.expectedCode {
+				t.Errorf("handler returned wrong status code: got %v want %v", status, tc.expectedCode)
+			}
 
-	// Verify fields array exists
-	if len(response.Fields) == 0 {
-		t.Error("Expected fields in response")
+			// For error cases, check the error message
+			if tc.expectedError != "" {
+				if !strings.Contains(rr.Body.String(), tc.expectedError) {
+					t.Errorf("handler returned unexpected error: got %v want %v", rr.Body.String(), tc.expectedError)
+				}
+			}
+
+			// For success case, verify response content
+			if tc.expectedCode == http.StatusOK {
+				var response FieldConfigResponse
+				if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+					t.Errorf("Failed to decode response: %v", err)
+				}
+
+				// Verify mandatory fields exist
+				if len(response.MandatoryFields) == 0 {
+					t.Error("Expected mandatory fields in response")
+				}
+
+				// Verify fields array exists
+				if len(response.Fields) == 0 {
+					t.Error("Expected fields in response")
+				}
+			}
+		})
 	}
 }
 
 func TestHandleAPIProcess(t *testing.T) {
-	// Initialize config
+	// Initialize config and API keys
 	if err := InitConfig(); err != nil {
 		t.Fatalf("Failed to initialize config: %v", err)
 	}
+	auth.InitAPIKeys()
 
-	// Create a buffer to write our multipart form to
-	var b bytes.Buffer
-	w := multipart.NewWriter(&b)
+	// Create a test file
+	fileContent := `Account Number,Account Active,Customer Name
+1234,Yes,John Doe
+5678,No,Jane Smith`
 
-	// Add the file to the form
-	file, err := os.Open("uploads/synthetic_test_data.xlsx")
-	if err != nil {
-		t.Fatalf("Failed to open test file: %v", err)
-	}
-	defer file.Close()
-
-	fw, err := w.CreateFormFile("file", "synthetic_test_data.xlsx")
-	if err != nil {
-		t.Fatalf("Failed to create form file: %v", err)
-	}
-	if _, err := io.Copy(fw, file); err != nil {
-		t.Fatalf("Failed to copy file content: %v", err)
-	}
-
-	// Add the mappings to the form
-	mappings := map[string]string{
-		"Client_Code": "Client Code",
-		"Customer_ID": "Customer ID",
-		"Account_ID":  "Account Number",
-	}
-	mappingsJSON, err := json.Marshal(mappings)
-	if err != nil {
-		t.Fatalf("Failed to marshal mappings: %v", err)
-	}
-	if err := w.WriteField("mappings", string(mappingsJSON)); err != nil {
-		t.Fatalf("Failed to write mappings field: %v", err)
-	}
-
-	// Add the output format to the form
-	if err := w.WriteField("outputFormat", "xlsx"); err != nil {
-		t.Fatalf("Failed to write output format field: %v", err)
-	}
-
-	// Close the writer
-	w.Close()
-
-	// Create a request with the form
-	req, err := http.NewRequest("POST", "/api/v1/process", &b)
+	tempFile, err := os.CreateTemp("./uploads", "test_upload_*.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	defer os.Remove(tempFile.Name())
 
-	// Create a ResponseRecorder
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(handleAPIProcess)
-
-	// Call the handler
-	handler.ServeHTTP(rr, req)
-
-	// Check the status code
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	if _, err := tempFile.WriteString(fileContent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
 	}
 
-	// Check the response headers
-	if contentType := rr.Header().Get("Content-Type"); contentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
-		t.Errorf("handler returned wrong content type: got %v", contentType)
+	testCases := []struct {
+		name          string
+		apiKey        string
+		expectedCode  int
+		expectedError string
+	}{
+		{
+			name:         "Valid API Key",
+			apiKey:       "test-api-key-1",
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:          "Missing API Key",
+			apiKey:        "",
+			expectedCode:  http.StatusUnauthorized,
+			expectedError: "API key is missing",
+		},
+		{
+			name:          "Invalid API Key",
+			apiKey:        "invalid-key",
+			expectedCode:  http.StatusUnauthorized,
+			expectedError: "Invalid API key",
+		},
 	}
 
-	if disposition := rr.Header().Get("Content-Disposition"); disposition == "" {
-		t.Error("Expected Content-Disposition header")
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a new multipart form
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
 
-	if summary := rr.Header().Get("X-Processing-Summary"); summary == "" {
-		t.Error("Expected X-Processing-Summary header")
-	}
+			// Add the file
+			file, err := os.Open(tempFile.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
 
-	// Check that we got some file content
-	if len(rr.Body.Bytes()) == 0 {
-		t.Error("Expected file content in response")
+			part, err := writer.CreateFormFile("file", filepath.Base(tempFile.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.Copy(part, file); err != nil {
+				t.Fatal(err)
+			}
+
+			// Add the mappings
+			mappings := map[string]string{
+				"Account_Number": "Account Number",
+				"Account_Active": "Account Active",
+				"Customer_Name":  "Customer Name",
+			}
+			mappingsJSON, err := json.Marshal(mappings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.WriteField("mappings", string(mappingsJSON)); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			// Create the request
+			req := httptest.NewRequest("POST", "/api/v1/process", &body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+
+			// Add API key if present
+			if tc.apiKey != "" {
+				req.Header.Set("X-API-Key", tc.apiKey)
+			}
+
+			// Create a ResponseRecorder
+			rr := httptest.NewRecorder()
+			handler := auth.RequireAPIKey(handleAPIProcess)
+
+			// Call the handler
+			handler.ServeHTTP(rr, req)
+
+			// Check the status code
+			if status := rr.Code; status != tc.expectedCode {
+				t.Errorf("handler returned wrong status code: got %v want %v", status, tc.expectedCode)
+			}
+
+			// For error cases, check the error message
+			if tc.expectedError != "" {
+				if !strings.Contains(rr.Body.String(), tc.expectedError) {
+					t.Errorf("handler returned unexpected error: got %v want %v", rr.Body.String(), tc.expectedError)
+				}
+			}
+
+			// For success case, verify response headers
+			if tc.expectedCode == http.StatusOK {
+				if contentType := rr.Header().Get("Content-Type"); contentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
+					t.Errorf("handler returned wrong content type: got %v", contentType)
+				}
+
+				if disposition := rr.Header().Get("Content-Disposition"); disposition == "" {
+					t.Error("Expected Content-Disposition header")
+				}
+
+				if summary := rr.Header().Get("X-Processing-Summary"); summary == "" {
+					t.Error("Expected X-Processing-Summary header")
+				}
+			}
+		})
 	}
 }
