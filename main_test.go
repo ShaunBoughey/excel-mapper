@@ -103,8 +103,23 @@ func TestHandleUploadCSVFile(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
 	}
 
-	if !strings.Contains(recorder.Body.String(), "File uploaded successfully") {
-		t.Errorf("handler returned unexpected body: got %v", recorder.Body.String())
+	// Parse JSON response
+	var response map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse JSON response: %v", err)
+	}
+
+	// Validate response structure
+	if success, ok := response["success"].(bool); !ok || !success {
+		t.Errorf("Expected success=true, got %v", response["success"])
+	}
+
+	if _, ok := response["summary"].(string); !ok {
+		t.Errorf("Expected summary field in response")
+	}
+
+	if _, ok := response["outputFilename"].(string); !ok {
+		t.Errorf("Expected outputFilename field in response")
 	}
 }
 
