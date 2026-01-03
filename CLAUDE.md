@@ -63,3 +63,55 @@ export API_KEYS="your-api-key-1,your-api-key-2"
 ## Testing Patterns
 
 Tests use `httptest.NewRequest` and `httptest.NewRecorder` for handler testing. See `main_test.go` for examples of multipart form file upload tests.
+
+## Git Workflow
+
+**CRITICAL: Always create a branch BEFORE making any commits!**
+
+### Proper Workflow for Changes
+
+1. **Create branch FIRST** (before any code changes):
+   ```bash
+   git checkout -b feature/descriptive-name
+   ```
+
+2. Make your changes and commits on the branch
+
+3. Push the branch:
+   ```bash
+   git push -u origin feature/descriptive-name
+   ```
+
+4. Create a Pull Request from the branch to main
+
+### ❌ NEVER Do This:
+```bash
+# Don't commit directly to main!
+git checkout main
+git add .
+git commit -m "changes"  # ❌ WRONG - now main has commits it shouldn't
+```
+
+### ✅ Always Do This:
+```bash
+# Create branch first, then commit
+git checkout -b feature/my-changes  # ✅ CORRECT - branch first!
+git add .
+git commit -m "changes"
+git push -u origin feature/my-changes
+```
+
+### Recovery from Mistakes
+
+If commits were accidentally made to main:
+```bash
+# Reset local main
+git checkout main
+git reset --hard origin/main
+
+# Force push to clean remote (use with caution!)
+git push --force origin main
+
+# Your commits are safe on the feature branch
+git checkout feature/my-changes
+```
