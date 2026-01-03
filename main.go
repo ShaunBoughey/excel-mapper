@@ -267,9 +267,27 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process the uploaded file using the field mappings
-	summary, _ := processFile(tempFilePath, fieldMappings, order, outputFormat, uniqueID)
+	summary, outputPath := processFile(tempFilePath, fieldMappings, order, outputFormat, uniqueID)
 
-	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
+	// Extract filenames from paths for download links
+	outputFilename := filepath.Base(outputPath)
+
+	// Build response with actual filenames
+	response := map[string]interface{}{
+		"success":        true,
+		"summary":        summary,
+		"outputFilename": outputFilename,
+	}
+
+	// Add missing data filename for CSV and markdown formats
+	if outputFormat == "csv" {
+		response["missingFilename"] = fmt.Sprintf("%s_missing_data.csv", uniqueID)
+	} else if outputFormat == "markdown" {
+		response["missingFilename"] = fmt.Sprintf("%s_missing_data.md", uniqueID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // readInputFile reads and parses the input file based on its extension
