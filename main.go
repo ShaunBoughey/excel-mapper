@@ -231,6 +231,15 @@ func readCSVFile(filePath string) ([][]string, error) {
 	return rows, nil
 }
 
+// normalizeHeaders converts headers to lowercase and trims whitespace
+func normalizeHeaders(headers []string) []string {
+	normalized := make([]string, len(headers))
+	for i, header := range headers {
+		normalized[i] = strings.TrimSpace(strings.ToLower(header))
+	}
+	return normalized
+}
+
 func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
 	rows, err := readInputFile(filePath)
 	if err != nil {
@@ -248,10 +257,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	successfulRows := 0
 
 	// Normalize headers in the first row
-	normalizedHeaders := make([]string, len(rows[0]))
-	for i, header := range rows[0] {
-		normalizedHeaders[i] = strings.TrimSpace(strings.ToLower(header))
-	}
+	normalizedHeaders := normalizeHeaders(rows[0])
 
 	// Create a new file for successful rows and missing rows
 	outputFile := excelize.NewFile()
