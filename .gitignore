@@ -1,0 +1,5 @@
+# Test coverage
+coverage.out
+
+# Uploaded files and processing results
+uploads/*

@@ -288,7 +288,8 @@ func TestProcessFileSuccess(t *testing.T) {
 	}
 	order := []string{"Client Code", "Customer ID", "Account Number"}
 	outputFormat := "excel"
-	summary, errStr := processFile(tempFile.Name(), fieldMappings, order, outputFormat)
+	uniqueID := "test_" + generateUniqueID()
+	summary, errStr := processFile(tempFile.Name(), fieldMappings, order, outputFormat, uniqueID)
 
 	if errStr != "" && !strings.Contains(errStr, "processed_data.xlsx") {
 		t.Errorf("unexpected error string: got %v", errStr)
@@ -309,7 +310,8 @@ func TestProcessFileInvalidFile(t *testing.T) {
 	}
 	order := []string{"Client Code", "Customer ID", "Account Number"}
 	outputFormat := "excel"
-	_, errStr := processFile(invalidFilePath, fieldMappings, order, outputFormat)
+	uniqueID := "test_" + generateUniqueID()
+	_, errStr := processFile(invalidFilePath, fieldMappings, order, outputFormat, uniqueID)
 
 	if errStr == "" || !strings.Contains(errStr, "Error opening file") {
 		t.Errorf("expected error string for invalid file path: got %v", errStr)
@@ -338,8 +340,9 @@ func TestProcessFileCSVOutput(t *testing.T) {
 	}
 	order := []string{"Client Code", "Customer ID", "Account Number"}
 	outputFormat := "csv"
+	uniqueID := "test_" + generateUniqueID()
 
-	summary, processedFilePath := processFile(tempFile.Name(), fieldMappings, order, outputFormat)
+	summary, processedFilePath := processFile(tempFile.Name(), fieldMappings, order, outputFormat, uniqueID)
 
 	if summary == "" {
 		t.Errorf("unexpected empty summary")
@@ -555,8 +558,9 @@ func TestProcessFileMarkdownOutput(t *testing.T) {
 		"Customer Name":  "Customer Name",
 	}
 	order := []string{"Account Number", "Account Active", "Customer Name"}
+	uniqueID := "test_" + generateUniqueID()
 
-	summary, outputPath := processFile(tempFile.Name(), fieldMappings, order, "markdown")
+	summary, outputPath := processFile(tempFile.Name(), fieldMappings, order, "markdown", uniqueID)
 
 	if !strings.Contains(summary, "Total Rows Processed") {
 		t.Error("Summary missing expected content")
