@@ -69,6 +69,10 @@ func init() {
 }
 
 func main() {
+	// Serve static UI files (CSS, JS)
+	uiFS := http.FileServer(http.Dir("ui"))
+	http.Handle("/ui/", http.StripPrefix("/ui/", uiFS))
+
 	// UI routes
 	http.HandleFunc("/", serveUI)
 	http.HandleFunc("/upload", handleUpload)
@@ -166,17 +170,26 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Extract field mappings from form
 	fieldMappings := make(map[string]string)
 	order := fieldConfig.GetOrderedFields()
-	for key, values := range r.PostForm {
+
+	// For multipart forms, use MultipartForm.Value instead of PostForm
+	formValues := r.MultipartForm.Value
+	for key, values := range formValues {
 		if strings.HasPrefix(key, "mapping_") {
 			expectedField := strings.TrimPrefix(key, "mapping_")
-			fieldMappings[expectedField] = values[0]
+			if len(values) > 0 && values[0] != "" {
+				fieldMappings[expectedField] = values[0]
+			}
 			if !contains(order, expectedField) {
 				order = append(order, expectedField)
 			}
 		}
 	}
 
-	outputFormat := r.PostFormValue("outputFormat")
+	// Get output format from multipart form
+	outputFormat := "excel"
+	if formats, ok := formValues["outputFormat"]; ok && len(formats) > 0 {
+		outputFormat = formats[0]
+	}
 
 	// Process the uploaded file using the field mappings
 	summary, _ := processFile(tempFilePath, fieldMappings, order, outputFormat)
@@ -184,7 +197,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
 }
 
-// ////////////////////////////// WIP rework ////////////////////////////////////////
+// readInputFile reads and parses the input file based on its extension
 func readInputFile(filePath string) ([][]string, error) {
 	if strings.HasSuffix(filePath, ".xlsx") {
 		return readXLSXFile(filePath)
@@ -240,6 +253,209 @@ func normalizeHeaders(headers []string) []string {
 	return normalized
 }
 
+// createOutputWorkbook creates a new Excel workbook with ProcessedData and MissingData sheets
+func createOutputWorkbook(headers []string) *excelize.File {
+	outputFile := excelize.NewFile()
+	outputFile.NewSheet("ProcessedData")
+	outputFile.NewSheet("MissingData")
+	outputFile.DeleteSheet("Sheet1")
+	outputFile.SetSheetRow("ProcessedData", "A1", &headers)
+	outputFile.SetSheetRow("MissingData", "A1", &headers)
+	return outputFile
+}
+
+// generateProcessingSummary creates a formatted summary of the processing results
+func generateProcessingSummary(totalRows, successfulRows, missingCount int, missingDetails string) string {
+	var summaryBuilder strings.Builder
+	summaryBuilder.WriteString("Data Mapping Summary:\n")
+	if missingDetails != "" {
+		summaryBuilder.WriteString(missingDetails)
+	}
+	summaryBuilder.WriteString(fmt.Sprintf("\nTotal Rows Processed: %d\n", totalRows))
+	summaryBuilder.WriteString(fmt.Sprintf("Successful Rows: %d\n", successfulRows))
+	summaryBuilder.WriteString(fmt.Sprintf("Rows with Missing Data: %d\n", missingCount))
+	return summaryBuilder.String()
+}
+
+// saveAsXLSX saves the output file as an Excel workbook
+func saveAsXLSX(outputFile *excelize.File, outputPath string) (string, error) {
+	if err := outputFile.SaveAs(outputPath); err != nil {
+		return "", fmt.Errorf("error saving output file: %w", err)
+	}
+	return outputPath, nil
+}
+
+// saveAsMarkdown saves the output file as Markdown with a report format
+func saveAsMarkdown(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int, summary string) (string, error) {
+	outputFilePath := "./uploads/processed_data.md"
+	mdFile, err := os.Create(outputFilePath)
+	if err != nil {
+		return "", fmt.Errorf("error creating markdown file: %w", err)
+	}
+	defer mdFile.Close()
+
+	var processedRows [][]string
+	processedRows = append(processedRows, order) // Add headers
+	for rowIndex := 2; rowIndex < outputRowCount; rowIndex++ {
+		row := make([]string, len(order))
+		for j := range row {
+			cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+			row[j] = cell
+		}
+		processedRows = append(processedRows, row)
+	}
+
+	markdownContent := generateMarkdownTable(order, processedRows[1:])
+
+	// Add summary section to markdown
+	fullContent := fmt.Sprintf("# Data Processing Report\n\n## Summary\n\n```\n%s\n```\n\n## Processed Data\n\n%s",
+		summary, markdownContent)
+
+	_, err = mdFile.WriteString(fullContent)
+	if err != nil {
+		return "", fmt.Errorf("error writing markdown content: %w", err)
+	}
+
+	// Save missing rows to separate markdown file
+	missingFilePath := "./uploads/missing_data.md"
+	missingMdFile, err := os.Create(missingFilePath)
+	if err != nil {
+		return outputFilePath, fmt.Errorf("error creating missing data markdown file: %w", err)
+	}
+	defer missingMdFile.Close()
+
+	var missingRows [][]string
+	missingRows = append(missingRows, order)
+	for rowIndex := 2; rowIndex < missingRowCount; rowIndex++ {
+		row := make([]string, len(order))
+		for j := range row {
+			cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+			row[j] = cell
+		}
+		missingRows = append(missingRows, row)
+	}
+
+	missingMarkdownContent := generateMarkdownTable(order, missingRows[1:])
+	missingFullContent := fmt.Sprintf("# Missing Data Report\n\n## Missing Records\n\n%s", missingMarkdownContent)
+
+	_, err = missingMdFile.WriteString(missingFullContent)
+	if err != nil {
+		return outputFilePath, fmt.Errorf("error writing missing data markdown content: %w", err)
+	}
+
+	return outputFilePath, nil
+}
+
+// saveAsCSV saves the output file as CSV with pipe delimiter
+func saveAsCSV(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int) (string, error) {
+	outputFilePath := "./uploads/processed_data.csv"
+	csvFile, err := os.Create(outputFilePath)
+	if err != nil {
+		return "", fmt.Errorf("error creating CSV file: %w", err)
+	}
+	defer csvFile.Close()
+
+	csvWriter := csv.NewWriter(csvFile)
+	csvWriter.Comma = '|'
+	csvWriter.Write(order)
+	// Write processed rows
+	for rowIndex := 2; rowIndex < outputRowCount; rowIndex++ {
+		row := make([]string, len(order))
+		for j := range row {
+			cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+			row[j] = cell
+		}
+		csvWriter.Write(row)
+	}
+	csvWriter.Flush()
+
+	// Save missing rows to separate CSV
+	missingFilePath := "./uploads/missing_data.csv"
+	missingCsvFile, err := os.Create(missingFilePath)
+	if err != nil {
+		return outputFilePath, fmt.Errorf("error creating missing data CSV file: %w", err)
+	}
+	defer missingCsvFile.Close()
+
+	missingCsvWriter := csv.NewWriter(missingCsvFile)
+	missingCsvWriter.Comma = '|'
+	missingCsvWriter.Write(order)
+	// Write missing rows
+	for rowIndex := 2; rowIndex < missingRowCount; rowIndex++ {
+		row := make([]string, len(order))
+		for j := range row {
+			cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
+			row[j] = cell
+		}
+		missingCsvWriter.Write(row)
+	}
+	missingCsvWriter.Flush()
+
+	return outputFilePath, nil
+}
+
+// processRow processes a single row and returns the processed data, missing data, missing fields, and success status
+func processRow(row []string, normalizedHeaders []string, fieldMappings map[string]string, order []string, fieldConfig *config.FieldConfig) (processedRow []string, missingRow []string, missingFields []string, isSuccess bool) {
+	processedRow = make([]string, len(order))
+	missingRow = make([]string, len(order))
+	missingFields = make([]string, 0, len(order))
+	isSuccess = true
+
+	for fieldIndex, expectedField := range order {
+		var isMandatory bool
+		for _, field := range fieldConfig.Fields {
+			if field.Name == expectedField {
+				isMandatory = field.IsMandatory
+				break
+			}
+		}
+
+		mappedColumn := fieldMappings[expectedField]
+
+		// If the mapping is empty (no column selected) and not mandatory,
+		// just leave it blank without marking as MISSING
+		if mappedColumn == "" && !isMandatory {
+			processedRow[fieldIndex] = ""
+			missingRow[fieldIndex] = ""
+			continue
+		}
+
+		// Normalize column header for comparison
+		normalizedColumnHeader := strings.TrimSpace(strings.ToLower(mappedColumn))
+
+		// Find the column index for the current mapping
+		columnIndex := -1
+		for j, header := range normalizedHeaders {
+			if header == normalizedColumnHeader {
+				columnIndex = j
+				break
+			}
+		}
+
+		if columnIndex != -1 && columnIndex < len(row) && strings.TrimSpace(row[columnIndex]) != "" {
+			processedRow[fieldIndex] = row[columnIndex]
+			missingRow[fieldIndex] = row[columnIndex]
+		} else {
+			// Only add to missing fields if it's mandatory
+			if isMandatory {
+				missingFields = append(missingFields, expectedField)
+				isSuccess = false
+				missingRow[fieldIndex] = "MISSING"
+			} else {
+				// For non-mandatory fields, only mark as MISSING if a mapping was selected
+				if mappedColumn != "" {
+					missingRow[fieldIndex] = "MISSING"
+				} else {
+					missingRow[fieldIndex] = ""
+				}
+			}
+			processedRow[fieldIndex] = ""
+		}
+	}
+
+	return processedRow, missingRow, missingFields, isSuccess
+}
+
 func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
 	rows, err := readInputFile(filePath)
 	if err != nil {
@@ -251,8 +467,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	}
 
 	// Proceed with processing the rows (common for both .xlsx and .csv)
-	var summaryBuilder strings.Builder
-	summaryBuilder.WriteString("Data Mapping Summary:\n")
+	var missingDetailsBuilder strings.Builder
 	missingCount := 0
 	successfulRows := 0
 
@@ -260,14 +475,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	normalizedHeaders := normalizeHeaders(rows[0])
 
 	// Create a new file for successful rows and missing rows
-	outputFile := excelize.NewFile()
-	outputFile.NewSheet("ProcessedData")
-	outputFile.NewSheet("MissingData")
-	outputFile.DeleteSheet("Sheet1")
-
-	// Set headers for ProcessedData and MissingData sheets
-	outputFile.SetSheetRow("ProcessedData", "A1", &order)
-	outputFile.SetSheetRow("MissingData", "A1", &order)
+	outputFile := createOutputWorkbook(order)
 
 	outputRowIndex := 2
 	missingRowIndex := 2
@@ -279,62 +487,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 			continue
 		}
 
-		processedRow := make([]string, len(order))
-		missingRow := make([]string, len(order))
-		rowMissingFields := make([]string, 0, len(order))
-		rowSuccess := true
-
-		for fieldIndex, expectedField := range order {
-			var isMandatory bool
-			for _, field := range fieldConfig.Fields {
-				if field.Name == expectedField {
-					isMandatory = field.IsMandatory
-					break
-				}
-			}
-
-			mappedColumn := fieldMappings[expectedField]
-
-			// If the mapping is empty (no column selected) and not mandatory,
-			// just leave it blank without marking as MISSING
-			if mappedColumn == "" && !isMandatory {
-				processedRow[fieldIndex] = ""
-				missingRow[fieldIndex] = ""
-				continue
-			}
-
-			// Normalize column header for comparison
-			normalizedColumnHeader := strings.TrimSpace(strings.ToLower(mappedColumn))
-
-			// Find the column index for the current mapping
-			columnIndex := -1
-			for j, header := range normalizedHeaders {
-				if header == normalizedColumnHeader {
-					columnIndex = j
-					break
-				}
-			}
-
-			if columnIndex != -1 && columnIndex < len(row) && strings.TrimSpace(row[columnIndex]) != "" {
-				processedRow[fieldIndex] = row[columnIndex]
-				missingRow[fieldIndex] = row[columnIndex]
-			} else {
-				// Only add to missing fields if it's mandatory
-				if isMandatory {
-					rowMissingFields = append(rowMissingFields, expectedField)
-					rowSuccess = false
-					missingRow[fieldIndex] = "MISSING"
-				} else {
-					// For non-mandatory fields, only mark as MISSING if a mapping was selected
-					if mappedColumn != "" {
-						missingRow[fieldIndex] = "MISSING"
-					} else {
-						missingRow[fieldIndex] = ""
-					}
-				}
-				processedRow[fieldIndex] = ""
-			}
-		}
+		processedRow, missingRow, rowMissingFields, rowSuccess := processRow(row, normalizedHeaders, fieldMappings, order, fieldConfig)
 
 		if rowSuccess {
 			successfulRows++
@@ -345,141 +498,42 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 			outputFile.SetSheetRow("MissingData", fmt.Sprintf("A%d", missingRowIndex), &missingRow)
 			missingRowIndex++
 			if len(rowMissingFields) > 0 {
-				summaryBuilder.WriteString(fmt.Sprintf("Row %d: Missing mandatory fields - %s\n", i+1, strings.Join(rowMissingFields, ", ")))
+				missingDetailsBuilder.WriteString(fmt.Sprintf("Row %d: Missing mandatory fields - %s\n", i+1, strings.Join(rowMissingFields, ", ")))
 			}
 		}
 	}
 
-	summaryBuilder.WriteString(fmt.Sprintf("\nTotal Rows Processed: %d\n", len(rows)-1))
-	summaryBuilder.WriteString(fmt.Sprintf("Successful Rows: %d\n", successfulRows))
-	summaryBuilder.WriteString(fmt.Sprintf("Rows with Missing Data: %d\n", missingCount))
-
-	// Output summary to the console as well
-	fmt.Println(summaryBuilder.String())
+	// Generate and output summary
+	summary := generateProcessingSummary(len(rows)-1, successfulRows, missingCount, missingDetailsBuilder.String())
+	fmt.Println(summary)
 
 	// Save the output file based on user choice
 	if outputFormat == "csv" {
-		// Save processed rows to CSV
-		outputFilePath := "./uploads/processed_data.csv"
-		csvFile, err := os.Create(outputFilePath)
+		outputFilePath, err := saveAsCSV(outputFile, order, outputRowIndex, missingRowIndex)
 		if err != nil {
-			fmt.Println("Error creating CSV file:", err)
-			return summaryBuilder.String(), ""
+			fmt.Println(err)
+			return summary, ""
 		}
-		defer csvFile.Close()
-
-		csvWriter := csv.NewWriter(csvFile)
-		csvWriter.Comma = '|'
-		csvWriter.Write(order)
-		// Write processed rows
-		for rowIndex := 2; rowIndex < outputRowIndex; rowIndex++ {
-			row := make([]string, len(order))
-			for j := range row {
-				cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
-				row[j] = cell
-			}
-			csvWriter.Write(row)
-		}
-		csvWriter.Flush()
-
-		// Save missing rows to separate CSV
-		missingFilePath := "./uploads/missing_data.csv"
-		missingCsvFile, err := os.Create(missingFilePath)
-		if err != nil {
-			fmt.Println("Error creating missing data CSV file:", err)
-			return summaryBuilder.String(), ""
-		}
-		defer missingCsvFile.Close()
-
-		missingCsvWriter := csv.NewWriter(missingCsvFile)
-		missingCsvWriter.Comma = '|'
-		missingCsvWriter.Write(order)
-		// Write missing rows
-		for rowIndex := 2; rowIndex < missingRowIndex; rowIndex++ {
-			row := make([]string, len(order))
-			for j := range row {
-				cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
-				row[j] = cell
-			}
-			missingCsvWriter.Write(row)
-		}
-		missingCsvWriter.Flush()
-
-		return summaryBuilder.String(), outputFilePath
+		return summary, outputFilePath
 	}
 
 	if outputFormat == "markdown" {
-		// Output processed rows to markdown
-		outputFilePath := "./uploads/processed_data.md"
-		mdFile, err := os.Create(outputFilePath)
+		outputFilePath, err := saveAsMarkdown(outputFile, order, outputRowIndex, missingRowIndex, summary)
 		if err != nil {
-			fmt.Println("Error creating markdown file:", err)
-			return summaryBuilder.String(), ""
+			fmt.Println(err)
+			return summary, ""
 		}
-		defer mdFile.Close()
-
-		var processedRows [][]string
-		processedRows = append(processedRows, order) // Add headers
-		for rowIndex := 2; rowIndex < outputRowIndex; rowIndex++ {
-			row := make([]string, len(order))
-			for j := range row {
-				cell, _ := outputFile.GetCellValue("ProcessedData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
-				row[j] = cell
-			}
-			processedRows = append(processedRows, row)
-		}
-
-		markdownContent := generateMarkdownTable(order, processedRows[1:])
-
-		// Add summary section to markdown
-		fullContent := fmt.Sprintf("# Data Processing Report\n\n## Summary\n\n```\n%s\n```\n\n## Processed Data\n\n%s",
-			summaryBuilder.String(), markdownContent)
-
-		_, err = mdFile.WriteString(fullContent)
-		if err != nil {
-			fmt.Println("Error writing markdown content:", err)
-			return summaryBuilder.String(), ""
-		}
-
-		// Save missing rows to separate markdown file
-		missingFilePath := "./uploads/missing_data.md"
-		missingMdFile, err := os.Create(missingFilePath)
-		if err != nil {
-			fmt.Println("Error creating missing data markdown file:", err)
-			return summaryBuilder.String(), outputFilePath
-		}
-		defer missingMdFile.Close()
-
-		var missingRows [][]string
-		missingRows = append(missingRows, order)
-		for rowIndex := 2; rowIndex < missingRowIndex; rowIndex++ {
-			row := make([]string, len(order))
-			for j := range row {
-				cell, _ := outputFile.GetCellValue("MissingData", fmt.Sprintf("%s%d", string(rune('A'+j)), rowIndex))
-				row[j] = cell
-			}
-			missingRows = append(missingRows, row)
-		}
-
-		missingMarkdownContent := generateMarkdownTable(order, missingRows[1:])
-		missingFullContent := fmt.Sprintf("# Missing Data Report\n\n## Missing Records\n\n%s", missingMarkdownContent)
-
-		_, err = missingMdFile.WriteString(missingFullContent)
-		if err != nil {
-			fmt.Println("Error writing missing data markdown content:", err)
-		}
-
-		return summaryBuilder.String(), outputFilePath
+		return summary, outputFilePath
 	}
 
 	outputFilePath := "./uploads/processed_data.xlsx"
-	err = outputFile.SaveAs(outputFilePath)
+	outputFilePath, err = saveAsXLSX(outputFile, outputFilePath)
 	if err != nil {
-		fmt.Println("Error saving output file:", err)
-		return summaryBuilder.String(), ""
+		fmt.Println(err)
+		return summary, ""
 	}
 
-	return summaryBuilder.String(), outputFilePath
+	return summary, outputFilePath
 }
 
 func generateMarkdownTable(headers []string, rows [][]string) string {
