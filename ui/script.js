@@ -120,49 +120,58 @@ function handleSubmit(e) {
         if (!response.ok) {
             throw new Error('Network response was not ok');
         }
-        return response.text();
+        // Check if response is JSON
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            return response.json();
+        } else {
+            // If not JSON, return as text for debugging
+            return response.text().then(text => {
+                console.error('Expected JSON but got:', text);
+                throw new Error('Server returned non-JSON response');
+            });
+        }
     })
     .then(data => {
-        handleUploadSummary(data);
+        if (data && data.success) {
+            handleUploadSummary(data);
+        } else {
+            throw new Error('Invalid response format');
+        }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred during the upload. Please try again.');
+        alert('An error occurred during the upload. Please try again. Check console for details.');
     });
 }
 
-function handleUploadSummary(summary) {
+function handleUploadSummary(data) {
+    console.log('handleUploadSummary called with:', data);
+
     const resultContainer = document.getElementById('resultContainer');
     const summaryContent = document.getElementById('summaryContent');
     const downloadProcessedLink = document.getElementById('downloadProcessedLink');
     const downloadMissingLink = document.getElementById('downloadMissingLink');
 
     resultContainer.classList.remove('d-none');
-    summaryContent.textContent = summary;
 
-    const outputFormat = document.getElementById('outputFormat').value;
-    switch(outputFormat) {
-        case 'csv':
-            downloadProcessedLink.href = '/download?file=processed_data.csv';
-            downloadProcessedLink.download = 'processed_data.csv';
-            downloadMissingLink.href = '/download?file=missing_data.csv';
-            downloadMissingLink.download = 'missing_data.csv';
-            downloadProcessedLink.classList.remove('d-none');
-            downloadMissingLink.classList.remove('d-none');
-            break;
-        case 'markdown':
-            downloadProcessedLink.href = '/download?file=processed_data.md';
-            downloadProcessedLink.download = 'processed_data.md';
-            downloadMissingLink.href = '/download?file=missing_data.md';
-            downloadMissingLink.download = 'missing_data.md';
-            downloadProcessedLink.classList.remove('d-none');
-            downloadMissingLink.classList.remove('d-none');
-            break;
-        default:
-            downloadProcessedLink.href = '/download?file=processed_data.xlsx';
-            downloadProcessedLink.download = 'processed_data.xlsx';
-            downloadProcessedLink.classList.remove('d-none');
-            downloadMissingLink.classList.add('d-none');
+    // Format the summary with success message
+    const formattedSummary = '✅ File uploaded and processed successfully!\n\n' + data.summary;
+    console.log('Setting summary to:', formattedSummary);
+    summaryContent.textContent = formattedSummary;
+
+    // Use actual filenames from server response
+    downloadProcessedLink.href = '/download?file=' + encodeURIComponent(data.outputFilename);
+    downloadProcessedLink.download = data.outputFilename;
+    downloadProcessedLink.classList.remove('d-none');
+
+    // Show missing data link if filename is provided
+    if (data.missingFilename) {
+        downloadMissingLink.href = '/download?file=' + encodeURIComponent(data.missingFilename);
+        downloadMissingLink.download = data.missingFilename;
+        downloadMissingLink.classList.remove('d-none');
+    } else {
+        downloadMissingLink.classList.add('d-none');
     }
 }
 

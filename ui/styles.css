@@ -199,3 +199,18 @@ html[data-bs-theme="dark"] {
 [data-bs-theme="dark"] .api-docs:hover {
     background-color: rgba(76, 175, 80, 0.9);
 }
+
+/* Summary content styling */
+#summaryContent {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+}
+
+[data-bs-theme="dark"] #summaryContent {
+    border-color: #404040;
+}

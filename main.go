@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "import/docs" // swagger docs
 
@@ -68,7 +71,76 @@ func init() {
 	auth.InitAPIKeys()
 }
 
+// generateUniqueID generates a unique identifier for file uploads
+func generateUniqueID() string {
+	timestamp := time.Now().UnixNano()
+	randomBytes := make([]byte, 4)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("%d_%s", timestamp, hex.EncodeToString(randomBytes))
+}
+
+// cleanupOldFiles removes files older than the specified duration from the uploads directory
+func cleanupOldFiles(maxAge time.Duration) {
+	uploadsDir := "./uploads"
+
+	// Read all files in the uploads directory
+	files, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		log.Printf("Error reading uploads directory: %v", err)
+		return
+	}
+
+	now := time.Now()
+	deletedCount := 0
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		filePath := filepath.Join(uploadsDir, file.Name())
+		info, err := file.Info()
+		if err != nil {
+			log.Printf("Error getting file info for %s: %v", filePath, err)
+			continue
+		}
+
+		// Check if file is older than maxAge
+		if now.Sub(info.ModTime()) > maxAge {
+			if err := os.Remove(filePath); err != nil {
+				log.Printf("Error deleting old file %s: %v", filePath, err)
+			} else {
+				deletedCount++
+				log.Printf("Deleted old file: %s (age: %v)", file.Name(), now.Sub(info.ModTime()).Round(time.Minute))
+			}
+		}
+	}
+
+	if deletedCount > 0 {
+		log.Printf("Cleanup completed: deleted %d old file(s)", deletedCount)
+	}
+}
+
+// startFileCleanupRoutine starts a background goroutine that periodically cleans up old files
+func startFileCleanupRoutine() {
+	// Run cleanup every hour
+	ticker := time.NewTicker(1 * time.Hour)
+
+	// Run initial cleanup on startup
+	go func() {
+		log.Println("Starting file cleanup routine (runs every hour, deletes files older than 24 hours)")
+		cleanupOldFiles(24 * time.Hour)
+
+		for range ticker.C {
+			cleanupOldFiles(24 * time.Hour)
+		}
+	}()
+}
+
 func main() {
+	// Start background file cleanup routine
+	startFileCleanupRoutine()
+
 	// Serve static UI files (CSS, JS)
 	uiFS := http.FileServer(http.Dir("ui"))
 	http.Handle("/ui/", http.StripPrefix("/ui/", uiFS))
@@ -150,10 +222,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate unique ID for this upload to prevent race conditions
+	uniqueID := generateUniqueID()
+
 	// Save the uploaded file temporarily
 	tempDir := "./uploads"
 	os.MkdirAll(tempDir, os.ModePerm)
-	tempFilePath := filepath.Join(tempDir, handler.Filename)
+	tempFilePath := filepath.Join(tempDir, fmt.Sprintf("%s_%s", uniqueID, handler.Filename))
 	tempFile, err := os.Create(tempFilePath)
 	if err != nil {
 		http.Error(w, "Unable to save file", http.StatusInternalServerError)
@@ -192,9 +267,27 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process the uploaded file using the field mappings
-	summary, _ := processFile(tempFilePath, fieldMappings, order, outputFormat)
+	summary, outputPath := processFile(tempFilePath, fieldMappings, order, outputFormat, uniqueID)
 
-	fmt.Fprintf(w, "File uploaded successfully and mappings are: %+v\n\nSummary Report:\n%s\n", fieldMappings, summary)
+	// Extract filenames from paths for download links
+	outputFilename := filepath.Base(outputPath)
+
+	// Build response with actual filenames
+	response := map[string]interface{}{
+		"success":        true,
+		"summary":        summary,
+		"outputFilename": outputFilename,
+	}
+
+	// Add missing data filename for CSV and markdown formats
+	if outputFormat == "csv" {
+		response["missingFilename"] = fmt.Sprintf("%s_missing_data.csv", uniqueID)
+	} else if outputFormat == "markdown" {
+		response["missingFilename"] = fmt.Sprintf("%s_missing_data.md", uniqueID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // readInputFile reads and parses the input file based on its extension
@@ -286,8 +379,8 @@ func saveAsXLSX(outputFile *excelize.File, outputPath string) (string, error) {
 }
 
 // saveAsMarkdown saves the output file as Markdown with a report format
-func saveAsMarkdown(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int, summary string) (string, error) {
-	outputFilePath := "./uploads/processed_data.md"
+func saveAsMarkdown(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int, summary string, uniqueID string) (string, error) {
+	outputFilePath := fmt.Sprintf("./uploads/%s_processed_data.md", uniqueID)
 	mdFile, err := os.Create(outputFilePath)
 	if err != nil {
 		return "", fmt.Errorf("error creating markdown file: %w", err)
@@ -317,7 +410,7 @@ func saveAsMarkdown(outputFile *excelize.File, order []string, outputRowCount, m
 	}
 
 	// Save missing rows to separate markdown file
-	missingFilePath := "./uploads/missing_data.md"
+	missingFilePath := fmt.Sprintf("./uploads/%s_missing_data.md", uniqueID)
 	missingMdFile, err := os.Create(missingFilePath)
 	if err != nil {
 		return outputFilePath, fmt.Errorf("error creating missing data markdown file: %w", err)
@@ -347,8 +440,8 @@ func saveAsMarkdown(outputFile *excelize.File, order []string, outputRowCount, m
 }
 
 // saveAsCSV saves the output file as CSV with pipe delimiter
-func saveAsCSV(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int) (string, error) {
-	outputFilePath := "./uploads/processed_data.csv"
+func saveAsCSV(outputFile *excelize.File, order []string, outputRowCount, missingRowCount int, uniqueID string) (string, error) {
+	outputFilePath := fmt.Sprintf("./uploads/%s_processed_data.csv", uniqueID)
 	csvFile, err := os.Create(outputFilePath)
 	if err != nil {
 		return "", fmt.Errorf("error creating CSV file: %w", err)
@@ -370,7 +463,7 @@ func saveAsCSV(outputFile *excelize.File, order []string, outputRowCount, missin
 	csvWriter.Flush()
 
 	// Save missing rows to separate CSV
-	missingFilePath := "./uploads/missing_data.csv"
+	missingFilePath := fmt.Sprintf("./uploads/%s_missing_data.csv", uniqueID)
 	missingCsvFile, err := os.Create(missingFilePath)
 	if err != nil {
 		return outputFilePath, fmt.Errorf("error creating missing data CSV file: %w", err)
@@ -456,7 +549,7 @@ func processRow(row []string, normalizedHeaders []string, fieldMappings map[stri
 	return processedRow, missingRow, missingFields, isSuccess
 }
 
-func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string) (string, string) {
+func processFile(filePath string, fieldMappings map[string]string, order []string, outputFormat string, uniqueID string) (string, string) {
 	rows, err := readInputFile(filePath)
 	if err != nil {
 		return fmt.Sprintf("Error opening file: %v", err), "Error opening file"
@@ -509,7 +602,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 
 	// Save the output file based on user choice
 	if outputFormat == "csv" {
-		outputFilePath, err := saveAsCSV(outputFile, order, outputRowIndex, missingRowIndex)
+		outputFilePath, err := saveAsCSV(outputFile, order, outputRowIndex, missingRowIndex, uniqueID)
 		if err != nil {
 			fmt.Println(err)
 			return summary, ""
@@ -518,7 +611,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 	}
 
 	if outputFormat == "markdown" {
-		outputFilePath, err := saveAsMarkdown(outputFile, order, outputRowIndex, missingRowIndex, summary)
+		outputFilePath, err := saveAsMarkdown(outputFile, order, outputRowIndex, missingRowIndex, summary, uniqueID)
 		if err != nil {
 			fmt.Println(err)
 			return summary, ""
@@ -526,7 +619,7 @@ func processFile(filePath string, fieldMappings map[string]string, order []strin
 		return summary, outputFilePath
 	}
 
-	outputFilePath := "./uploads/processed_data.xlsx"
+	outputFilePath := fmt.Sprintf("./uploads/%s_processed_data.xlsx", uniqueID)
 	outputFilePath, err = saveAsXLSX(outputFile, outputFilePath)
 	if err != nil {
 		fmt.Println(err)
@@ -688,10 +781,13 @@ func handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate unique ID for this upload to prevent race conditions
+	uniqueID := generateUniqueID()
+
 	// Save file temporarily
 	tempDir := "./uploads"
 	os.MkdirAll(tempDir, os.ModePerm)
-	tempFilePath := filepath.Join(tempDir, handler.Filename)
+	tempFilePath := filepath.Join(tempDir, fmt.Sprintf("%s_%s", uniqueID, handler.Filename))
 	tempFile, err := os.Create(tempFilePath)
 	if err != nil {
 		sendJSONError(w, "Unable to save file", http.StatusInternalServerError)
@@ -713,7 +809,7 @@ func handleAPIProcess(w http.ResponseWriter, r *http.Request) {
 
 	// Process the file
 	order := fieldConfig.GetOrderedFields()
-	summary, outputPath := processFile(tempFilePath, fieldMappings, order, outputFormat)
+	summary, outputPath := processFile(tempFilePath, fieldMappings, order, outputFormat, uniqueID)
 
 	// Check if the output file exists
 	if _, err := os.Stat(outputPath); err != nil {
