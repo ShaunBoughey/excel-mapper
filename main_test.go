@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"import/auth"
 
@@ -1246,4 +1248,261 @@ func TestUploadDownloadWorkflow(t *testing.T) {
 			t.Logf("✅ End-to-end test passed for format %s: uploaded -> response verified -> file exists -> downloaded successfully", of.format)
 		})
 	}
+}
+
+// TestConcurrentUploads verifies that multiple simultaneous uploads don't interfere with each other
+// This validates that the unique ID solution prevents race conditions
+func TestConcurrentUploads(t *testing.T) {
+	numUploads := 10
+	fileContent := `Account Number,Account Active,Customer Name,Customer ID
+1234,Yes,John Doe,1001
+2345,No,Jane Smith,1002`
+
+	// Channel to collect results from concurrent uploads
+	type uploadResult struct {
+		filename string
+		err      error
+	}
+	results := make(chan uploadResult, numUploads)
+
+	// Launch concurrent uploads
+	for i := 0; i < numUploads; i++ {
+		go func(uploadNum int) {
+			// Create temp file for this upload
+			tempFile, err := os.CreateTemp("./uploads", fmt.Sprintf("test_concurrent_%d_*.csv", uploadNum))
+			if err != nil {
+				results <- uploadResult{err: err}
+				return
+			}
+			defer os.Remove(tempFile.Name())
+
+			_, err = tempFile.WriteString(fileContent)
+			if err != nil {
+				results <- uploadResult{err: err}
+				return
+			}
+			_, err = tempFile.Seek(0, 0)
+			if err != nil {
+				results <- uploadResult{err: err}
+				return
+			}
+
+			// Create multipart form
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+
+			part, err := writer.CreateFormFile("fileInput", filepath.Base(tempFile.Name()))
+			if err != nil {
+				results <- uploadResult{err: err}
+				return
+			}
+			_, err = io.Copy(part, tempFile)
+			if err != nil {
+				results <- uploadResult{err: err}
+				return
+			}
+
+			// Add field mappings
+			_ = writer.WriteField("mapping_Client_Code", "Account Number")
+			_ = writer.WriteField("mapping_Customer_ID", "Customer ID")
+			_ = writer.WriteField("mapping_Account_ID", "Account Number")
+			_ = writer.WriteField("outputFormat", "excel")
+
+			writer.Close()
+
+			// Upload
+			req := httptest.NewRequest("POST", "/upload", &body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+
+			recorder := httptest.NewRecorder()
+			http.HandlerFunc(handleUpload).ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusOK {
+				results <- uploadResult{err: fmt.Errorf("upload %d failed with status %d", uploadNum, recorder.Code)}
+				return
+			}
+
+			// Parse response
+			var response map[string]interface{}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				results <- uploadResult{err: fmt.Errorf("upload %d: failed to parse response: %v", uploadNum, err)}
+				return
+			}
+
+			filename, ok := response["outputFilename"].(string)
+			if !ok {
+				results <- uploadResult{err: fmt.Errorf("upload %d: no outputFilename in response", uploadNum)}
+				return
+			}
+
+			results <- uploadResult{filename: filename}
+		}(i)
+	}
+
+	// Collect all results
+	var filenames []string
+	var errors []error
+	for i := 0; i < numUploads; i++ {
+		result := <-results
+		if result.err != nil {
+			errors = append(errors, result.err)
+		} else {
+			filenames = append(filenames, result.filename)
+		}
+	}
+
+	// Check for errors
+	if len(errors) > 0 {
+		t.Errorf("Got %d errors during concurrent uploads:", len(errors))
+		for _, err := range errors {
+			t.Errorf("  - %v", err)
+		}
+	}
+
+	// Verify all uploads succeeded
+	if len(filenames) != numUploads {
+		t.Fatalf("Expected %d successful uploads, got %d", numUploads, len(filenames))
+	}
+
+	// Verify all filenames are unique (no overwrites)
+	uniqueFilenames := make(map[string]bool)
+	for _, filename := range filenames {
+		if uniqueFilenames[filename] {
+			t.Errorf("Duplicate filename detected: %s (race condition - files overwrote each other!)", filename)
+		}
+		uniqueFilenames[filename] = true
+	}
+
+	if len(uniqueFilenames) != numUploads {
+		t.Errorf("Expected %d unique filenames, got %d (some files overwrote each other)", numUploads, len(uniqueFilenames))
+	}
+
+	// Verify all files actually exist on disk
+	for _, filename := range filenames {
+		filePath := filepath.Join("./uploads", filename)
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			t.Errorf("File %s does not exist on disk", filename)
+		} else {
+			// Clean up
+			os.Remove(filePath)
+		}
+	}
+
+	t.Logf("✅ Concurrent upload test passed: %d simultaneous uploads created %d unique files with no overwrites", numUploads, len(uniqueFilenames))
+}
+
+// TestFileCleanup verifies that the cleanup function deletes old files but keeps recent ones
+func TestFileCleanup(t *testing.T) {
+	// Create uploads directory if it doesn't exist
+	os.MkdirAll("./uploads", os.ModePerm)
+
+	// Create old files (simulating files older than 24 hours)
+	oldFiles := []string{
+		"./uploads/old_file_1.xlsx",
+		"./uploads/old_file_2.csv",
+		"./uploads/old_file_3.md",
+	}
+
+	for _, oldFile := range oldFiles {
+		// Create file
+		f, err := os.Create(oldFile)
+		if err != nil {
+			t.Fatalf("Failed to create test file %s: %v", oldFile, err)
+		}
+		f.WriteString("test content")
+		f.Close()
+
+		// Set modification time to 25 hours ago
+		oldTime := time.Now().Add(-25 * time.Hour)
+		if err := os.Chtimes(oldFile, oldTime, oldTime); err != nil {
+			t.Fatalf("Failed to set old time on %s: %v", oldFile, err)
+		}
+	}
+
+	// Create recent files (less than 1 hour old)
+	recentFiles := []string{
+		"./uploads/recent_file_1.xlsx",
+		"./uploads/recent_file_2.csv",
+	}
+
+	for _, recentFile := range recentFiles {
+		f, err := os.Create(recentFile)
+		if err != nil {
+			t.Fatalf("Failed to create test file %s: %v", recentFile, err)
+		}
+		f.WriteString("test content")
+		f.Close()
+	}
+
+	// Verify all files exist before cleanup
+	for _, file := range append(oldFiles, recentFiles...) {
+		if _, err := os.Stat(file); os.IsNotExist(err) {
+			t.Fatalf("Test file %s should exist before cleanup", file)
+		}
+	}
+
+	// Run cleanup (files older than 24 hours)
+	cleanupOldFiles(24 * time.Hour)
+
+	// Verify old files were deleted
+	for _, oldFile := range oldFiles {
+		if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+			t.Errorf("Old file %s should have been deleted but still exists", oldFile)
+			// Clean up for next test run
+			os.Remove(oldFile)
+		}
+	}
+
+	// Verify recent files still exist
+	for _, recentFile := range recentFiles {
+		if _, err := os.Stat(recentFile); os.IsNotExist(err) {
+			t.Errorf("Recent file %s should still exist but was deleted", recentFile)
+		} else {
+			// Clean up
+			os.Remove(recentFile)
+		}
+	}
+
+	t.Logf("✅ File cleanup test passed: old files deleted, recent files preserved")
+}
+
+// TestGenerateUniqueID verifies that unique IDs are actually unique and have correct format
+func TestGenerateUniqueID(t *testing.T) {
+	numIDs := 1000
+	ids := make(map[string]bool)
+
+	// Generate many IDs rapidly
+	for i := 0; i < numIDs; i++ {
+		id := generateUniqueID()
+
+		// Verify format: should be "timestamp_randomhex"
+		parts := strings.Split(id, "_")
+		if len(parts) != 2 {
+			t.Errorf("ID format incorrect, expected 'timestamp_random', got: %s", id)
+			continue
+		}
+
+		// Verify timestamp part is numeric
+		if _, err := fmt.Sscanf(parts[0], "%d", new(int64)); err != nil {
+			t.Errorf("Timestamp part should be numeric, got: %s", parts[0])
+		}
+
+		// Verify random part is hex (8 characters)
+		if len(parts[1]) != 8 {
+			t.Errorf("Random part should be 8 hex characters, got: %s (length %d)", parts[1], len(parts[1]))
+		}
+
+		// Check for duplicates
+		if ids[id] {
+			t.Errorf("Duplicate ID generated: %s", id)
+		}
+		ids[id] = true
+	}
+
+	// Verify all IDs are unique
+	if len(ids) != numIDs {
+		t.Errorf("Expected %d unique IDs, got %d", numIDs, len(ids))
+	}
+
+	t.Logf("✅ Unique ID test passed: generated %d unique IDs with correct format", len(ids))
 }
