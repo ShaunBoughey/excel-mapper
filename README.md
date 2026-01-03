@@ -1,4 +1,4 @@
-![Coverage](https://img.shields.io/badge/Coverage-83.6%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-78.0%25-brightgreen)
 [![CodeFactor](https://www.codefactor.io/repository/github/shaunboughey/excel-mapper/badge)](https://www.codefactor.io/repository/github/shaunboughey/excel-mapper)
 
 # Excel Mapper
