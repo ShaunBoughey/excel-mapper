@@ -1086,3 +1086,164 @@ func TestHandleAPIProcessDifferentOutputFormats(t *testing.T) {
 		})
 	}
 }
+
+// TestUploadDownloadWorkflow tests the complete end-to-end flow:
+// Upload file -> Get response with filename -> Verify file exists -> Download file -> Verify content
+// This test would have caught the bug where downloads returned 404 due to filename mismatch
+func TestUploadDownloadWorkflow(t *testing.T) {
+	// Test data with both successful and missing data rows
+	fileContent := `Account Number,Account Active,Customer Name,Customer ID
+1234,Yes,John Doe,1001
+2345,No,Jane Smith,1002
+3456,Yes,Bob Johnson,1003`
+
+	outputFormats := []struct {
+		format              string
+		expectedExtension   string
+		hasMissingDataFile  bool
+		missingDataExtension string
+	}{
+		{"excel", ".xlsx", false, ""},
+		{"csv", ".csv", true, ".csv"},
+		{"markdown", ".md", true, ".md"},
+	}
+
+	for _, of := range outputFormats {
+		t.Run(of.format, func(t *testing.T) {
+			// Step 1: Create and upload a test file
+			tempFile, err := os.CreateTemp("./uploads", "test_e2e_*.csv")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.Remove(tempFile.Name())
+
+			_, err = tempFile.WriteString(fileContent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = tempFile.Seek(0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create multipart form
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+
+			part, err := writer.CreateFormFile("fileInput", filepath.Base(tempFile.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = io.Copy(part, tempFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Add field mappings
+			_ = writer.WriteField("mapping_Client_Code", "Account Number")
+			_ = writer.WriteField("mapping_Customer_ID", "Customer ID")
+			_ = writer.WriteField("mapping_Account_ID", "Account Number")
+			_ = writer.WriteField("outputFormat", of.format)
+
+			writer.Close()
+
+			// Step 2: Upload via handleUpload
+			uploadReq := httptest.NewRequest("POST", "/upload", &body)
+			uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+
+			uploadRecorder := httptest.NewRecorder()
+			http.HandlerFunc(handleUpload).ServeHTTP(uploadRecorder, uploadReq)
+
+			if status := uploadRecorder.Code; status != http.StatusOK {
+				t.Fatalf("Upload failed with status %v: %s", status, uploadRecorder.Body.String())
+			}
+
+			// Step 3: Parse JSON response and extract filenames
+			var response map[string]interface{}
+			if err := json.Unmarshal(uploadRecorder.Body.Bytes(), &response); err != nil {
+				t.Fatalf("Failed to parse upload response: %v", err)
+			}
+
+			outputFilename, ok := response["outputFilename"].(string)
+			if !ok || outputFilename == "" {
+				t.Fatalf("No outputFilename in response: %+v", response)
+			}
+
+			// Verify filename has expected extension
+			if !strings.HasSuffix(outputFilename, of.expectedExtension) {
+				t.Errorf("Expected filename to end with %s, got %s", of.expectedExtension, outputFilename)
+			}
+
+			// Verify filename contains unique ID format (timestamp_random_*)
+			if !strings.Contains(outputFilename, "_") {
+				t.Errorf("Expected filename to contain unique ID with underscore, got %s", outputFilename)
+			}
+
+			// Step 4: Verify the file actually exists on disk
+			outputPath := filepath.Join("./uploads", outputFilename)
+			if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+				t.Fatalf("Output file does not exist at %s", outputPath)
+			}
+			defer os.Remove(outputPath) // Clean up
+
+			// Step 5: Download the file via handleDownload
+			downloadReq := httptest.NewRequest("GET", "/download?file="+outputFilename, nil)
+			downloadRecorder := httptest.NewRecorder()
+			http.HandlerFunc(handleDownload).ServeHTTP(downloadRecorder, downloadReq)
+
+			if status := downloadRecorder.Code; status != http.StatusOK {
+				t.Fatalf("Download failed with status %v for file %s", status, outputFilename)
+			}
+
+			// Step 6: Verify downloaded file is not empty
+			downloadedContent := downloadRecorder.Body.Bytes()
+			if len(downloadedContent) == 0 {
+				t.Fatal("Downloaded file is empty")
+			}
+
+			// Step 7: For CSV and Markdown, verify missing data file exists and is downloadable
+			if of.hasMissingDataFile {
+				missingFilename, ok := response["missingFilename"].(string)
+				if !ok || missingFilename == "" {
+					t.Errorf("Expected missingFilename in response for format %s", of.format)
+				} else {
+					// Verify missing data file exists
+					missingPath := filepath.Join("./uploads", missingFilename)
+					if _, err := os.Stat(missingPath); os.IsNotExist(err) {
+						t.Errorf("Missing data file does not exist at %s", missingPath)
+					} else {
+						defer os.Remove(missingPath) // Clean up
+
+						// Verify missing data file is downloadable
+						missingDownloadReq := httptest.NewRequest("GET", "/download?file="+missingFilename, nil)
+						missingDownloadRecorder := httptest.NewRecorder()
+						http.HandlerFunc(handleDownload).ServeHTTP(missingDownloadRecorder, missingDownloadReq)
+
+						if status := missingDownloadRecorder.Code; status != http.StatusOK {
+							t.Errorf("Missing data download failed with status %v for file %s", status, missingFilename)
+						}
+
+						if len(missingDownloadRecorder.Body.Bytes()) == 0 {
+							t.Error("Downloaded missing data file is empty")
+						}
+					}
+				}
+			}
+
+			// Step 8: Verify content quality for CSV format (easier to validate)
+			if of.format == "csv" {
+				csvContent := string(downloadedContent)
+				// Should have headers
+				if !strings.Contains(csvContent, "Client_Code") {
+					t.Error("CSV missing expected header 'Client_Code'")
+				}
+				// Should use pipe delimiter
+				if !strings.Contains(csvContent, "|") {
+					t.Error("CSV should use pipe delimiter")
+				}
+			}
+
+			t.Logf("✅ End-to-end test passed for format %s: uploaded -> response verified -> file exists -> downloaded successfully", of.format)
+		})
+	}
+}
